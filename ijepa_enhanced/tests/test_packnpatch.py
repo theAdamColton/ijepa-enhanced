@@ -3,20 +3,20 @@ import torch
 import unittest
 
 from torch.nn import CrossEntropyLoss
-from .. import packnpatch
+from .. import patchnpack
 from .utils import imread, imshow
 import os
 
 
-class TestPacknPatch(unittest.TestCase):
+class TestPatchNPack(unittest.TestCase):
     def test_pack_unpack(self):
         patch_size = 16
         image = imread("images/dog.jpg")
-        image = packnpatch.CropToMultipleOf(patch_size)(image)
-        patches, positions = packnpatch.patch(image, patch_size)
+        image = patchnpack.CropToMultipleOf(patch_size)(image)
+        patches, positions = patchnpack.patch(image, patch_size)
         ids = torch.full((len(patches),), 0)
-        image_hat = packnpatch.unpack(patches, positions, ids, patch_size, 3)[0]
-        imshow(image_hat)
+        image_hat = patchnpack.unpack(patches, positions, ids, patch_size, 3)[0]
+        # imshow(image_hat)
         self.assertTrue(torch.equal(image, image_hat))
 
     def test_packer_images(self):
@@ -24,21 +24,7 @@ class TestPacknPatch(unittest.TestCase):
         patch_size = 32
         images = ["images/" + f for f in os.listdir("./images/")]
         images = [imread(image) for image in images]
-        images = [packnpatch.CropToMultipleOf(patch_size)(image) for image in images]
-        packer = packnpatch.Packer(sequence_length)
-        for i, image in enumerate(images):
-            patches, positions = packnpatch.patch(image, patch_size)
-            ids = torch.full((len(patches),), i)
-            packer.pack([patches], [positions], [ids])
-
-        batched_patches, batched_positions, batched_ids = packer.flush_batched_tensors()
-        for patches, positions, ids in zip(
-            batched_patches, batched_positions, batched_ids
-        ):
-            recimages = packnpatch.unpack(patches, positions, ids, patch_size, 3)
-            for image in recimages:
-                pass
-                # imshow(image)
+        images = [patchnpack.CropToMultipleOf(patch_size)(image) for image in images]
 
     def test_pack_simple(self):
         sequence1 = torch.rand(10)
@@ -46,7 +32,7 @@ class TestPacknPatch(unittest.TestCase):
         sequence3 = torch.rand(32)
         sequence4 = torch.rand(32)
 
-        batches, unbatched = packnpatch.pack(
+        batches, unbatched = patchnpack.pack(
             [sequence1, sequence2, sequence3, sequence4], 32
         )
 
@@ -57,11 +43,11 @@ class TestPacknPatch(unittest.TestCase):
             )
         )
 
-    def test_packnpatch_pipe(self):
+    def test_patchnpack_pipe(self):
         image = imread("./images/dog.jpg")
         p = 32
-        image = packnpatch.CropToMultipleOf(p)(image)
-        patches = packnpatch.patch(image, p)
+        image = patchnpack.CropToMultipleOf(p)(image)
+        patches = patchnpack.patch(image, p)
 
     def test_crop_to_multiple(self):
         random.seed(42)
@@ -70,6 +56,31 @@ class TestPacknPatch(unittest.TestCase):
             h = random.randint(p, 333)
             w = random.randint(p, 333)
             im = torch.empty(h, w)
-            im = packnpatch.CropToMultipleOf(p)(im)
+            im = patchnpack.CropToMultipleOf(p)(im)
             self.assertEqual(im.shape[0] % p, 0)
             self.assertEqual(im.shape[1] % p, 0)
+
+    def test_pack_unpack_random(self):
+        rng = torch.manual_seed(42)
+        random.seed(42)
+        for _ in range(1):
+            sequence_length = random.randint(3, 373)
+            patch_size = random.randint(1, 23)
+            batch_size = random.randint(1, 10)
+            packer = patchnpack.PatchNPacker(
+                patch_size=patch_size,
+                sequence_length=sequence_length,
+                batch_size=batch_size,
+            )
+            n_images = random.randint(3, 13)
+            images = []
+            for _ in range(n_images):
+                h = random.randint(patch_size, 333)
+                h = round((h // patch_size) * patch_size)
+                w = random.randint(patch_size, 333)
+                w = round((w // patch_size) * patch_size)
+                image = torch.empty(3, h, w)
+                images.append(image)
+                packer.append(image)
+            while packer.can_pop_batch():
+                batch = packer.pop_batch()
