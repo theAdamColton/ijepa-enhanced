@@ -43,24 +43,24 @@ class CropToMultipleOf(nn.Module):
 
 def patch(x: torch.Tensor, patch_size: int):
     """
-    x: An image in (... C H W) form
+    x: An image of shape (C H W)
 
     returns:
-        patches: (... S Z)
-        positions (... S 2)
-          h,w positions of the patches
+        patches: (S Z)
+          flattened sequence of patches
+        positions (S 2)
+          flattened sequence of h,w positions
     """
-    *_, h, w = x.shape
+    c, h, w = x.shape
     assert h % patch_size == 0, h
     assert w % patch_size == 0, w
-    x = einx.rearrange(
-        "... C (NPH PH) (NPW PW) -> ... (NPH NPW) (C PH PW)",
-        x,
-        PH=patch_size,
-        PW=patch_size,
-    )
     nph = h // patch_size
     npw = w // patch_size
+
+    x = torch.reshape(x, (c, nph, patch_size, npw, patch_size))
+    x = x.permute(1, 3, 0, 2, 4)
+    x = x.reshape(nph * npw, c * patch_size * patch_size)
+
     device = x.device
     positions = torch.meshgrid(
         torch.arange(nph, device=device),
@@ -68,68 +68,9 @@ def patch(x: torch.Tensor, patch_size: int):
         indexing="ij",
     )
     positions = torch.stack(positions, -1)
-    positions = einx.rearrange("... NPH NPW Z -> ... (NPH NPW) Z", positions)
+    positions = positions.reshape(nph * npw, 2)
+
     return x, positions
-
-
-def pack(sequences: List[torch.Tensor], sequence_length: int, pad_value=-1):
-    """
-    Greedily packs sequences into sequences of specified length
-
-    sequences: a list of variable lengthed sequences, each sequence is:
-        (S ...) where S is different across different items,
-        and the trailing dimensions are the same across different items
-
-    Returns:
-        batches: A list of batches which may be empty
-
-        unbatched_sequences: A list of leftover sequences that were
-        not batched because they don't fill an entire batch
-    """
-    batches = []
-    unbatched_sequences = []
-    for sequence in sequences:
-        unbatched_sequences.append(sequence)
-
-        s = sum(len(x) for x in unbatched_sequences)
-
-        if s >= sequence_length:
-            if s == sequence_length or len(unbatched_sequences) == 1:
-                sequence = make_sequence(
-                    unbatched_sequences, sequence_length, pad_value
-                )
-                unbatched_sequences = []
-            else:
-                sequence = make_sequence(
-                    unbatched_sequences[:-1], sequence_length, pad_value
-                )
-                unbatched_sequences = [unbatched_sequences[-1]]
-
-            batches.append(sequence)
-
-    return batches, unbatched_sequences
-
-
-def make_sequence(tensors, sequence_length, pad_value=0):
-    """
-    concatenates and pads and truncates tensors to form a sequence of length exactly sequence_length
-    """
-    s = sum(len(x) for x in tensors)
-
-    if s < sequence_length:
-        pad_amt = max(sequence_length - s, 0)
-        rest_shape = tensors[0].shape[1:]
-        pad = torch.full(
-            (pad_amt, *rest_shape),
-            pad_value,
-            device=tensors[0].device,
-            dtype=tensors[0].dtype,
-        )
-        tensors.append(pad)
-    tensors = torch.cat(tensors, 0)
-    if len(tensors) > sequence_length:
-        tensors = tensors[:sequence_length]
-    return tensors
 
 
 def unpack(patches, positions, ids, patch_size: int, image_channels: int):
@@ -142,6 +83,8 @@ def unpack(patches, positions, ids, patch_size: int, image_channels: int):
     )
     images = []
     for id in torch.unique(ids):
+        if id == MASK_IMAGE_ID:
+            continue
         mask = ids == id
         h = positions[mask][..., 0].max() * patch_size + patch_size
         w = positions[mask][..., 1].max() * patch_size + patch_size
@@ -202,19 +145,20 @@ MASK_IMAGE_ID = -100
 
 
 class PatchNPacker:
-    def __init__(self, patch_size, sequence_length, batch_size):
+    def __init__(self, patch_size, sequence_length, batch_size, rng=None):
         self.patch_size = patch_size
         self.sequence_length = sequence_length
         self.batch_size = batch_size
-        self.unbatched_sequences: List[TensorSet] = []
-        self.batched_sequences: List[TensorSet] = []
+        self.unpacked_sequences: List[TensorSet] = []
+        self.packed_sequences: List[TensorSet] = []
         self.__id = 0
+        self.rng = rng
 
     def append(self, image, id=None):
         patches, positions, image_ids = self.patch(image, id)
         self.__id += 1
 
-        sequence = TensorSet(patches, positions, image_ids)
+        sequence = TensorSet([patches, positions, image_ids])
 
         self._pack(sequence)
 
@@ -228,30 +172,45 @@ class PatchNPacker:
         return patches, positions, image_ids
 
     def _pack(self, sequence):
-        s = sum(ts.num_rows for ts in self.unbatched_sequences)
+        s = sum(ts.num_rows for ts in self.unpacked_sequences)
 
         if s + sequence.num_rows > self.sequence_length and s > 0:
-            batch = TensorSet.cat(self.unbatched_sequences)
-            self.unbatched_sequences = [sequence]
+            packed_sequence = TensorSet.cat(self.unpacked_sequences)
+            self.unpacked_sequences = [sequence]
 
-            pad_amt = self.sequence_length - (s + sequence.num_rows)
-            if pad_amt > 0:
-                batch = batch.pad(pad_amt, MASK_IMAGE_ID)
-            self.batched_sequences.append(batch)
+            # if the sequence length overflows, randomly drops items in the sequence
+            needs_drop = packed_sequence.num_rows > self.sequence_length
+            if needs_drop:
+                mask = get_sample_mask(
+                    packed_sequence.num_rows, self.sequence_length, self.rng
+                )
+                packed_sequence = packed_sequence[mask]
+
+            # if the sequence length is too short, masks
+            pad_amt = self.sequence_length - packed_sequence.num_rows
+            needs_pad = pad_amt > 0
+            if needs_pad:
+                packed_sequence = packed_sequence.pad(pad_amt, MASK_IMAGE_ID)
+
+            if packed_sequence.num_rows != self.sequence_length:
+                import bpdb
+
+                bpdb.set_trace()
+            self.packed_sequences.append(packed_sequence)
         else:
-            self.unbatched_sequences.append(sequence)
+            self.unpacked_sequences.append(sequence)
 
     def can_pop_batch(self):
-        return len(self.batched_sequences) >= self.batch_size
+        return len(self.packed_sequences) >= self.batch_size
 
     def pop_batch(self):
         if not self.can_pop_batch():
-            return False
-        batch, self.batched_sequences = (
-            self.batched_sequences[: self.batch_size],
-            self.batched_sequences[self.batch_size :],
+            return None
+        batch, self.packed_sequences = (
+            self.packed_sequences[: self.batch_size],
+            self.packed_sequences[self.batch_size :],
         )
-        return TensorSet.cat(batch)
+        return TensorSet.stack(batch)
 
 
 class ContextTargetPatchNPacker:

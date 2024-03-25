@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 import torch
 
 
@@ -7,20 +8,24 @@ class TensorSet:
     each column with the same sequence length (rows)
 
     Columns do not have to have the same dype or device
+
+    Each column is of shape (B, S, ...) if is_batched
+     otherwise shape (S, ...)
+     All columns must have matching batch and sequence dims
     """
 
-    def __init__(self, *columns):
-        if isinstance(columns[0], list):
-            columns = columns[0]
-
-        for c in columns:
-            assert len(c) == len(columns[0])
+    def __init__(self, columns: Iterable[torch.Tensor], is_batched=False):
+        columns = list(columns)
+        self.is_batched = is_batched
         self.columns = columns
 
     @property
     def num_rows(self):
         if self.columns:
-            return len(self.columns[0])
+            if self.is_batched:
+                return self.columns[0].shape[1]
+            else:
+                return self.columns[0].shape[0]
         return 0
 
     @property
@@ -33,13 +38,21 @@ class TensorSet:
     @staticmethod
     def cat(tensorsets):
         num_columns = tensorsets[0].num_columns
-        for ts in tensorsets:
-            assert ts.num_columns == num_columns
         c = []
+        axis = 1 if tensorsets[0].is_batched else 0
         for j in range(num_columns):
-            c.append(torch.cat([ts.columns[j] for ts in tensorsets], 0))
+            c.append(torch.cat([ts.columns[j] for ts in tensorsets], axis))
 
         return TensorSet(c)
+
+    @staticmethod
+    def stack(tensorsets):
+        num_columns = tensorsets[0].num_columns
+        c = []
+        for j in range(num_columns):
+            c.append(torch.stack([ts.columns[j] for ts in tensorsets]))
+
+        return TensorSet(c, is_batched=True)
 
     def pad(self, amount: int, value=-1):
         assert amount >= 0
@@ -52,7 +65,6 @@ class TensorSet:
                 dtype=c.dtype,
                 device=c.device,
             )
-            padding.append(padding)
+            padding.append(pad_col)
         padding = TensorSet(padding)
-
         return TensorSet.cat([self, padding])
