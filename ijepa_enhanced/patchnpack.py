@@ -75,7 +75,7 @@ def patch(x: torch.Tensor, patch_size: int):
 
 def unpack(patches, positions, ids, patch_size: int, image_channels: int):
     patches = einx.rearrange(
-        "S (C PH PW) -> S C PH PW",
+        "... S (C PH PW) -> ... S C PH PW",
         patches,
         C=image_channels,
         PH=patch_size,
@@ -104,6 +104,7 @@ def unpack(patches, positions, ids, patch_size: int, image_channels: int):
 
 def get_sample_mask(s, max_length: int, rng=None):
     u = torch.rand(s, generator=rng)
+    assert s > max_length
     p = max_length / s
     q = u.quantile(p)
     mask = u < q
@@ -144,6 +145,24 @@ def sample_rect_mask(
 MASK_IMAGE_ID = -100
 
 
+def make_sequence(sequence: List[TensorSet], sequence_length, rng=None) -> TensorSet:
+    sequence = TensorSet.cat(sequence)
+
+    # if the sequence length overflows, randomly drops items in the sequence
+    needs_drop = sequence.num_rows > sequence_length
+    if needs_drop:
+        mask = get_sample_mask(sequence.num_rows, sequence_length, rng)
+        sequence = sequence[mask]
+
+    # if the sequence length is too short, pads
+    pad_amt = sequence_length - sequence.num_rows
+    needs_pad = pad_amt > 0
+    if needs_pad:
+        sequence = sequence.pad(pad_amt, MASK_IMAGE_ID)
+
+    return sequence
+
+
 class PatchNPacker:
     def __init__(self, patch_size, sequence_length, batch_size, rng=None):
         self.patch_size = patch_size
@@ -175,27 +194,11 @@ class PatchNPacker:
         s = sum(ts.num_rows for ts in self.unpacked_sequences)
 
         if s + sequence.num_rows > self.sequence_length and s > 0:
-            packed_sequence = TensorSet.cat(self.unpacked_sequences)
+            packed_sequence = make_sequence(
+                self.unpacked_sequences, self.sequence_length
+            )
             self.unpacked_sequences = [sequence]
 
-            # if the sequence length overflows, randomly drops items in the sequence
-            needs_drop = packed_sequence.num_rows > self.sequence_length
-            if needs_drop:
-                mask = get_sample_mask(
-                    packed_sequence.num_rows, self.sequence_length, self.rng
-                )
-                packed_sequence = packed_sequence[mask]
-
-            # if the sequence length is too short, masks
-            pad_amt = self.sequence_length - packed_sequence.num_rows
-            needs_pad = pad_amt > 0
-            if needs_pad:
-                packed_sequence = packed_sequence.pad(pad_amt, MASK_IMAGE_ID)
-
-            if packed_sequence.num_rows != self.sequence_length:
-                import bpdb
-
-                bpdb.set_trace()
             self.packed_sequences.append(packed_sequence)
         else:
             self.unpacked_sequences.append(sequence)
@@ -246,15 +249,19 @@ class ContextTargetPatchNPacker:
         self.batch_size = batch_size
         self.rng = rng
 
-    def append(self, image):
+    def append(self, image, id=None):
         _, h, w = image.shape
-        nph, npw = h // self.patch_size
+        nph = h // self.patch_size
+        npw = w // self.patch_size
 
-        patches, positions, ids = self.patchnpacker_context.patch(image)
-        # sometimes requires a random mask to get the number of target patches to be lower than the max sequence length allowable
-        random_mask = get_sample_mask(
-            patches.shape[0], self.sequence_length_target, rng=self.rng
-        )
+        patches, positions, ids = self.patchnpacker_target.patch(image, id=id)
+        sequence = TensorSet([patches, positions, ids])
+        # if sequence.num_rows > self.sequence_length_target:
+        #     mask = get_sample_mask(
+        #         sequence.num_rows, self.sequence_length_target, self.rng
+        #     )
+        #     mask = mask.to(patches.device)
+        #     sequence = sequence[mask]
 
         target_blocks = []
         for _ in range(4):
@@ -270,22 +277,24 @@ class ContextTargetPatchNPacker:
             target_blocks.append(target_block)
 
         context_block = sample_rect_mask(
-            h, w, 0.85, 1.0, 1.0, 1.0, rng=self.rng
+            nph, npw, 0.85, 1.0, 1.0, 1.0, rng=self.rng
         ).flatten()
         target_any = sum(target_blocks) > 0
         context_block = context_block & ~target_any
 
-        sequence = TensorSet(patches, positions, ids, target_any)
-        sequence = sequence[random_mask]
+        sequence.columns.append(target_any)
         context_sequence = sequence[context_block]
         self.patchnpacker_context._pack(context_sequence)
         self.patchnpacker_target._pack(sequence)
 
+    def can_pop_batch(self):
+        return (
+            self.patchnpacker_context.can_pop_batch()
+            and self.patchnpacker_target.can_pop_batch()
+        )
+
     def pop_batch(self):
-        if (
-            not self.patchnpacker_context.can_pop_batch()
-            or not self.patchnpacker_target.can_pop_batch()
-        ):
+        if not self.can_pop_batch():
             return None
 
         return (

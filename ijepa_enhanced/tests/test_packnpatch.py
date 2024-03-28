@@ -9,6 +9,12 @@ import os
 
 
 class TestPatchNPack(unittest.TestCase):
+    def load_test_images(self, patch_size):
+        images = ["images/" + f for f in os.listdir("./images/")]
+        images = [imread(image) for image in images]
+        images = [patchnpack.CropToMultipleOf(patch_size)(image) for image in images]
+        return images
+
     def test_patch_unpack(self):
         patch_size = 16
         image = imread("images/dog.jpg")
@@ -22,10 +28,8 @@ class TestPatchNPack(unittest.TestCase):
     def test_packer_images(self):
         sequence_length = 8
         patch_size = 32
-        images = ["images/" + f for f in os.listdir("./images/")]
-        images = [imread(image) for image in images]
-        images = [patchnpack.CropToMultipleOf(patch_size)(image) for image in images]
         packer = patchnpack.PatchNPacker(patch_size, 32, 1)
+        images = self.load_test_images(patch_size)
         [packer.append(image) for image in images]
         while packer.can_pop_batch():
             batch = packer.pop_batch()
@@ -89,3 +93,35 @@ class TestPatchNPack(unittest.TestCase):
                         patch_seq, pos_seq, image_ids_seq, patch_size, c
                     )
                 self.assertEqual(sequence_length, batch.num_rows)
+
+    def test_context_target_images(self):
+        rng = torch.manual_seed(42)
+        random.seed(42)
+        patch_size = 16
+        sequence_length_context = 256
+        sequence_length_target = 512
+        ctpacker = patchnpack.ContextTargetPatchNPacker(
+            sequence_length_context, sequence_length_target, patch_size, 2, rng=rng
+        )
+        images = self.load_test_images(patch_size)
+        image_ids = list(range(len(images)))
+        [ctpacker.append(image, id) for image, id in zip(images, image_ids)]
+        batches = []
+        while ctpacker.can_pop_batch():
+            batches.append(ctpacker.pop_batch())
+        rec_images = []
+        for batch in batches:
+            batch_context, batch_target = batch
+            patches, positions, ids, *_ = batch_context.columns
+            rec_images.extend(patchnpack.unpack(patches, positions, ids, patch_size, 3))
+        [imshow(im) for im in rec_images]
+
+    def test_sample_rect_mask(self):
+        random.seed(100)
+        for _ in range(1000):
+            h = random.randint(5, 100)
+            w = random.randint(5, 100)
+            scale = patchnpack.random_uniform(0.1, 0.5)
+            mask = patchnpack.sample_rect_mask(h, w, scale, scale, 0.5, 1.5)
+            # imshow(mask)
+            print(scale, (mask * 1.0).mean())
