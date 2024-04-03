@@ -2,10 +2,16 @@ import random
 import torch
 import unittest
 
+import scipy
 from torch.nn import CrossEntropyLoss
 from .. import patchnpack
 from .utils import imread, imshow
 import os
+
+
+def is_basically_equal(values, value):
+    p = scipy.stats.ttest_1samp(values, value).pvalue
+    return p < 0.05
 
 
 class TestPatchNPack(unittest.TestCase):
@@ -114,7 +120,7 @@ class TestPatchNPack(unittest.TestCase):
             batch_context, batch_target = batch
             patches, positions, ids, *_ = batch_context.columns
             rec_images.extend(patchnpack.unpack(patches, positions, ids, patch_size, 3))
-        [imshow(im) for im in rec_images]
+        # [imshow(im) for im in rec_images]
 
     def test_sample_rect_mask(self):
         random.seed(100)
@@ -124,4 +130,25 @@ class TestPatchNPack(unittest.TestCase):
             scale = patchnpack.random_uniform(0.1, 0.5)
             mask = patchnpack.sample_rect_mask(h, w, scale, scale, 0.5, 1.5)
             # imshow(mask)
-            print(scale, (mask * 1.0).mean())
+            # print(scale, (mask * 1.0).mean())
+
+    def test_rest_mask_is_centered(self):
+        """
+        the mean of the center of the random masked pixels should be be 50% of the width and 50% of the height.
+        """
+        random.seed(100)
+        hs, ws = [], []
+        for _ in range(10000):
+            h = random.randint(5, 200)
+            w = random.randint(5, 200)
+            mask = patchnpack.sample_rect_mask(h, w, 0.0, 1.0, 0.5, 1.5)
+            ch, cw = (mask.nonzero() * 1.0).mean(0)
+            ch = ch / h
+            cw = cw / w
+            hs.append(ch)
+            ws.append(cw)
+        hs = torch.stack(hs)
+        ws = torch.stack(ws)
+
+        self.assertTrue(is_basically_equal(hs, 0.5))
+        self.assertTrue(is_basically_equal(ws, 0.5))
