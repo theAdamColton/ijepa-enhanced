@@ -102,7 +102,7 @@ def unpack(patches, positions, ids, patch_size: int, image_channels: int):
     return images
 
 
-def get_sample_mask(s, max_length: int, rng=None):
+def get_sample_mask(s: int, max_length: int, rng=None):
     u = torch.rand(s, generator=rng)
     assert s > max_length
     p = max_length / s

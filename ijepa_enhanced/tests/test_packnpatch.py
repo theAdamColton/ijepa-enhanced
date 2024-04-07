@@ -5,7 +5,7 @@ import unittest
 import scipy
 from torch.nn import CrossEntropyLoss
 from .. import patchnpack
-from .utils import imread, imshow
+from ..utils import imread, imshow
 import os
 
 
