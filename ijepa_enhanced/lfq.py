@@ -79,11 +79,20 @@ class LFQ(nn.Module):
     def __init__(
         self,
         dim,
-        diversity_gamma=1.0,
+        codebook_size,
         num_codebooks=1,
+        sample_minimization_weight=1.0,
+        batch_maximization_weight=1.0,
+        temperature=0.1,
     ):
+        """
+        dim: Integer dimension of input features
+        codebook_size: Integer number of total number of codebook codes. Each vector of dimension `dim` will be
+            quantized using `num_codebooks` codes, each code being an integer from 0 to `codebook_size`
+        """
+
         super().__init__()
-        codebook_size = 2**dim
+        assert log2(codebook_size).is_integer()
         codebook_dim = int(log2(codebook_size))
         codebook_dims = codebook_dim * num_codebooks
 
@@ -95,82 +104,85 @@ class LFQ(nn.Module):
         self.codebook_size = codebook_size
         self.num_codebooks = num_codebooks
 
-        self.diversity_gamma = diversity_gamma
+        self.sample_minimization_weight = sample_minimization_weight
+        self.batch_maximization_weight = batch_maximization_weight
+        self.temperature = temperature
 
     @property
     def dtype(self):
         return self.project_in.weight.dtype
 
+    def encode(self, x):
+        x = self.project_in(x)
+
+        # split out number of codebooks
+
+        x = einx.rearrange("b n (c d) -> b n c d", x, c=self.num_codebooks)
+
+        x = self._quantize(x)
+
+        indices = einx.sum((x > 0).int() * self.mask.int(), "b n c d -> b n c", "sum")
+
+    def _quantize(
+        self,
+        x,
+    ):
+        codebook_value = torch.Tensor([1.0]).to(device=x.device, dtype=x.dtype)
+        quantized = torch.where(x > 0, codebook_value, -codebook_value)
+        if self.training:
+            x = x + (quantized - x).detach()
+        else:
+            x = quantized
+        return x
+
+    def bits_to_indices(self, bits):
+        """
+        bits: bool tensor of big endian bits, where the last dimension is the bit dimension
+
+        returns indices, which are long integers from 0 to self.codebook_size
+        """
+        assert bits.shape[-1] == self.codebook_dim
+        indices = 2 ** torch.arange(
+            0,
+            self.codebook_dim,
+            1,
+            dtype=torch.long,
+            device=bits.device,
+        )
+        return (bits * indices).sum(-1)
+
+    def indices_to_bits(self, x):
+        """
+        x: long tensor of indices
+
+        returns big endian bits
+        """
+        mask = 2 ** torch.arange(self.codebook_dim, device=x.device, dtype=torch.long)
+        # x is now big endian bits, the last dimension being the bits
+        x = (x.unsqueeze(-1) & mask) != 0
+        return x
+
     def decode(self, x):
         """
         x: ... NH
             where NH is number of codebook heads
-            Is a longtensor of codebook indices, containing values from
+            A longtensor of codebook indices, containing values from
             0 to self.codebook_size
         """
-        mask = 1 << torch.arange(self.codebook_dim, device=x.device, dtype=torch.long)
-        x = (x.unsqueeze(-1) & mask) != 0
+        x = self.indices_to_bits(x)
         # to some sort of float
         x = x.to(self.dtype)
+        # -1 or 1
         x = x * 2 - 1
-        x = einx.rearrange("... Z NC -> ... (Z NC)", x)
+        x = einx.rearrange("... NC Z-> ... (NC Z)", x)
         x = self.project_out(x)
         return x
 
     def forward(
         self,
         x,
-        inv_temperature=100.0,
-        return_loss_breakdown=False,
         mask=None,
     ):
-        """
-        einstein notation
-        b - batch
-        n - sequence (or flattened spatial dimensions)
-        d - feature dimension, which is also log2(codebook size)
-        c - number of codebook dim
-        """
-
-        x = x.float()
-
-        is_img_or_video = x.ndim >= 4
-
-        # standardize image or video into (batch, seq, dimension)
-
-        if is_img_or_video:
-            x = rearrange(x, "b d ... -> b ... d")
-            x, ps = pack_one(x, "b * d")
-
-        assert (
-            x.shape[-1] == self.dim
-        ), f"expected dimension of {self.dim} but received {x.shape[-1]}"
-
-        x = self.project_in(x)
-
-        # split out number of codebooks
-
-        x = rearrange(x, "b n (c d) -> b n c d", c=self.num_codebooks)
-
-        # quantize by eq 3.
-
-        original_input = x
-
-        codebook_value = torch.ones_like(x) * self.codebook_scale
-        quantized = torch.where(x > 0, codebook_value, -codebook_value)
-
-        # use straight-through gradients (optionally with custom activation fn) if training
-
-        if self.training:
-            x = self.activation(x)
-            x = x + (quantized - x).detach()
-        else:
-            x = quantized
-
-        # calculate indices
-
-        indices = reduce((x > 0).int() * self.mask.int(), "b n c d -> b n c", "sum")
-
         # entropy aux loss
 
         if self.training:
