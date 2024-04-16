@@ -219,11 +219,13 @@ class LFQ(nn.Module):
             ret_dict["indices"] = indices
 
         if return_losses:
-            logits = 2 * torch.einsum(
-                "... i d, j d -> ... i j",
-                original_x,
-                self.codebook,
-            )
+            # logits = 2 * torch.einsum(
+            #     "... i d, j d -> ... i j",
+            #     original_x,
+            #     self.codebook,
+            # )
+            logits = torch.stack((original_x, -original_x), -1)
+            # logits = original_x.unsqueeze(-1)
             loss = entropy_loss(
                 logits,
                 mask,
