@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torchvision
+import math
 from torchvision.io import ImageReadMode
 import matplotlib.pyplot as plt
 
@@ -16,3 +17,18 @@ def imshow(image: torch.Tensor, ax=None):
         plt.show()
     else:
         ax.show(image)
+
+
+def rand_uniform(a, b):
+    u = torch.rand((1,)).item()
+    return u * (b - a) + a
+
+
+def rand_log_uniform(a, b):
+    if b < a:
+        tmp = b
+        b = a
+        a = tmp
+    if a == 0.0:
+        a = 1e-15
+    return math.e ** rand_uniform(math.log(a), math.log(b))

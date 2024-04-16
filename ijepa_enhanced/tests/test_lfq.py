@@ -1,7 +1,11 @@
 import unittest
 import torch
+import einx
+from torch import nn
+from torch.nn import functional as F
 
-from ..lfq import LFQ, masked_mean, entropy_loss
+from ..lfq import LFQ, masked_mean, entropy_loss, calculate_perplexity
+from ..utils import imread, rand_log_uniform
 
 
 class TestLFQ(unittest.TestCase):
@@ -32,12 +36,6 @@ class TestLFQ(unittest.TestCase):
             bits_rec = lfq.indices_to_bits(ints)
             self.assertTrue(torch.equal(bits, bits_rec))
 
-    def test_encode(self):
-        torch.manual_seed(42)
-        lfq = LFQ(512, 256)
-        x = torch.randn(7, 19, 512)
-        lfq.encode(x)
-
     def test_encode_decode(self):
         torch.manual_seed(42)
         for _ in range(10):
@@ -54,3 +52,80 @@ class TestLFQ(unittest.TestCase):
             self.assertTrue(torch.equal(q, xhat))
             self.assertEqual(dim, xhat.shape[-1])
             self.assertSequenceEqual(x.shape, xhat.shape)
+
+    def test_convergence_image_quant(self):
+        """
+        use downproj, lfq, upproj to compress simple image
+        """
+        torch.manual_seed(42)
+        for _ in range(100):
+            d = dict(
+                learning_rate=rand_log_uniform(1e2, 1e-5),
+                entropy_weight=rand_log_uniform(1e2, 1e-5),
+                commit_weight=rand_log_uniform(1e2, 1e-5),
+                entropy_sample_minimization_weight=rand_log_uniform(1, 0),
+                entropy_batch_maximization_weight=rand_log_uniform(1, 0),
+            )
+
+            loss, perplexity, xhat = do_train(**d)
+
+            print(
+                {k: f"{v:.5f}" for k, v in d.items()},
+                f"loss {loss.item():.5f} perplexity {perplexity.item():.5f}",
+            )
+
+
+def do_train(
+    patch_size=16,
+    c=3,
+    dim=256,
+    codebook_size=256,
+    image_file="./images/plume-512x512.jpg",
+    learning_rate=1e-3,
+    entropy_weight=1e2,
+    entropy_sample_minimization_weight=0.0,
+    entropy_batch_maximization_weight=1.0,
+    commit_weight=1e-9,
+    iterations=50,
+):
+    image = imread(image_file)
+    patches = einx.rearrange(
+        "c (nh ph) (nw pw) -> nh nw (ph pw c)", image, ph=patch_size, pw=patch_size, c=c
+    )
+    inproj = nn.Sequential(
+        nn.Linear(patch_size * patch_size * 3, dim),
+        nn.GELU(),
+    )
+    lfq = LFQ(
+        dim,
+        codebook_size,
+        sample_minimization_weight=entropy_sample_minimization_weight,
+        batch_maximization_weight=entropy_batch_maximization_weight,
+    )
+    outproj = nn.Sequential(
+        nn.GELU(),
+        nn.Linear(dim, patch_size * patch_size * c),
+    )
+    optim = torch.optim.SGD(
+        list(inproj.parameters()) + list(lfq.parameters()) + list(outproj.parameters()),
+        lr=learning_rate,
+    )
+    for i in range(iterations):
+        z = inproj(patches)
+        z, indices, entropy_loss, commit_loss = lfq(
+            z, return_losses=True, return_indices=True
+        )
+        xhat = outproj(z)
+        loss = F.mse_loss(patches, xhat)
+        loss = loss + entropy_loss * entropy_weight + commit_loss * commit_weight
+        loss.backward()
+        optim.step()
+        optim.zero_grad()
+
+    perplexity = calculate_perplexity(indices, codebook_size)
+    loss = F.mse_loss(patches, xhat)
+    xhat = einx.rearrange(
+        "nh nw (ph pw c) -> c (nh ph) (nw pw)", xhat, ph=patch_size, pw=patch_size, c=c
+    )
+
+    return loss, perplexity, xhat
