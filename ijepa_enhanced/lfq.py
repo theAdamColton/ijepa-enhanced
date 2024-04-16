@@ -4,6 +4,7 @@ from https://arxiv.org/abs/2310.05737
 """
 
 from math import log2, ceil
+from typing import OrderedDict
 
 import torch
 from torch import nn, einsum
@@ -84,6 +85,7 @@ class LFQ(nn.Module):
         sample_minimization_weight=1.0,
         batch_maximization_weight=1.0,
         temperature=0.1,
+        eps=1e-9,
     ):
         """
         dim: Integer dimension of input features
@@ -107,21 +109,11 @@ class LFQ(nn.Module):
         self.sample_minimization_weight = sample_minimization_weight
         self.batch_maximization_weight = batch_maximization_weight
         self.temperature = temperature
+        self.eps = eps
 
     @property
     def dtype(self):
         return self.project_in.weight.dtype
-
-    def encode(self, x):
-        x = self.project_in(x)
-
-        # split out number of codebooks
-
-        x = einx.rearrange("b n (c d) -> b n c d", x, c=self.num_codebooks)
-
-        x = self._quantize(x)
-
-        indices = einx.sum((x > 0).int() * self.mask.int(), "b n c d -> b n c", "sum")
 
     def _quantize(
         self,
@@ -179,101 +171,43 @@ class LFQ(nn.Module):
         return x
 
     def forward(
-        self,
-        x,
-        mask=None,
+        self, x, mask=None, return_dict=None, return_indices=None, return_losses=None
     ):
-        # entropy aux loss
+        x = self.project_in(x)
+        x = einx.rearrange("... (c d) -> ... c d", x, c=self.num_codebooks)
+        original_x = x
+        x = self._quantize(x)
 
-        if self.training:
-            # the same as euclidean distance up to a constant
-            distance = -2 * einsum(
-                "... i d, j d -> ... i j", original_input, self.codebook
+        ret_dict = OrderedDict({"hidden_states": None})
+
+        if return_indices:
+            indices = self.bits_to_indices(x > 0)
+            ret_dict["indices"] = indices
+
+        if return_losses:
+            loss = entropy_loss(
+                x,
+                mask,
+                self.temperature,
+                self.sample_minimization_weight,
+                self.batch_maximization_weight,
+                self.eps,
             )
+            ret_dict["entropy_loss"] = loss
 
-            prob = (-distance * inv_temperature).softmax(dim=-1)
-
-            # account for mask
-
-            if exists(mask):
-                prob = prob[mask]
-            else:
-                prob = rearrange(prob, "b n ... -> (b n) ...")
-
-            # whether to only use a fraction of probs, for reducing memory
-
-            if self.frac_per_sample_entropy < 1.0:
-                num_tokens = prob.shape[0]
-                num_sampled_tokens = int(num_tokens * self.frac_per_sample_entropy)
-                rand_mask = torch.randn(num_tokens).argsort(dim=-1) < num_sampled_tokens
-                per_sample_probs = prob[rand_mask]
-            else:
-                per_sample_probs = prob
-
-            # calculate per sample entropy
-
-            per_sample_entropy = entropy(per_sample_probs).mean()
-
-            # distribution over all available tokens in the batch
-
-            avg_prob = reduce(per_sample_probs, "... c d -> c d", "mean")
-            codebook_entropy = entropy(avg_prob).mean()
-
-            # 1. entropy will be nudged to be low for each code, to encourage the network to output confident predictions
-            # 2. codebook entropy will be nudged to be high, to encourage all codes to be uniformly used within the batch
-
-            entropy_aux_loss = (
-                per_sample_entropy - self.diversity_gamma * codebook_entropy
-            )
-        else:
-            # if not training, just return dummy 0
-            entropy_aux_loss = per_sample_entropy = codebook_entropy = self.zero
-
-        # commit loss
-
-        if self.training:
-            commit_loss = F.mse_loss(
-                original_input, quantized.detach(), reduction="none"
-            )
-
-            if exists(mask):
-                commit_loss = commit_loss[mask]
-
+            # commit loss applied between the tensors before and after the straight-through step
+            commit_loss = F.mse_loss(original_x, x.detach(), reduction="none")
+            if mask is not None:
+                commit_loss = masked_mean(commit_loss, mask)
             commit_loss = commit_loss.mean()
-        else:
-            commit_loss = self.zero
+            ret_dict["commit_loss"] = commit_loss
 
-        # merge back codebook dim
-
-        x = rearrange(x, "b n c d -> b n (c d)")
-
-        # project out to feature dimension if needed
-
+        x = einx.rearrange("... c d -> ... (c d)", x)
         x = self.project_out(x)
 
-        # reconstitute image or video dimensions
+        ret_dict["hidden_states"] = x
 
-        if is_img_or_video:
-            x = unpack_one(x, ps, "b * d")
-            x = rearrange(x, "b ... d -> b d ...")
+        if return_dict:
+            return ret_dict
 
-            indices = unpack_one(indices, ps, "b * c")
-
-        # whether to remove single codebook dim
-
-        if not self.keep_num_codebooks_dim:
-            indices = rearrange(indices, "... 1 -> ...")
-
-        # complete aux loss
-
-        aux_loss = (
-            entropy_aux_loss * self.entropy_loss_weight
-            + commit_loss * self.commitment_loss_weight
-        )
-
-        ret = Return(x, indices, aux_loss)
-
-        if not return_loss_breakdown:
-            return ret
-
-        return ret, LossBreakdown(per_sample_entropy, codebook_entropy, commit_loss)
+        return tuple(ret_dict.values())
