@@ -23,7 +23,7 @@ class TestPatchNPack(unittest.TestCase):
 
     def test_patch_unpack(self):
         patch_size = 16
-        image = imread("images/dog.jpg")
+        image = imread("images/dog-512x683.jpg")
         image = patchnpack.CropToMultipleOf(patch_size)(image)
         patches, positions = patchnpack.patch(image, patch_size)
         ids = torch.full((len(patches),), 0)
@@ -47,7 +47,7 @@ class TestPatchNPack(unittest.TestCase):
             images = patchnpack.unpack(patches, positions, image_ids, patch_size, 3)
 
     def test_patchnpack_pipe(self):
-        image = imread("./images/dog.jpg")
+        image = imread("./images/dog-512x683.jpg")
         p = 32
         image = patchnpack.CropToMultipleOf(p)(image)
         patches = patchnpack.patch(image, p)

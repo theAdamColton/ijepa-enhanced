@@ -1,6 +1,8 @@
 """
 Lookup free quantization
 from https://arxiv.org/abs/2310.05737
+
+adapted from parts of https://github.com/lucidrains/vector-quantize-pytorch/blob/ce3433256e40328de4a5bf06fadfcda2a227e696/vector_quantize_pytorch/lookup_free_quantization.py
 """
 
 from math import log2, ceil
@@ -42,7 +44,9 @@ def mult_along_first_dims(x, y):
     returns x * y elementwise along the leading dimensions of y
     """
     ndim_to_expand = x.ndim - y.ndim
-    return x * y[..., *[None for _ in range(ndim_to_expand)]]
+    for _ in range(ndim_to_expand):
+        y = y.unsqueeze(-1)
+    return x * y
 
 
 def masked_mean(x, m):
@@ -135,6 +139,12 @@ class LFQ(nn.Module):
         self.temperature = temperature
         self.eps = eps
 
+        all_codes = torch.arange(codebook_size)
+        bits = self.indices_to_bits(all_codes)
+        codebook = bits * 2.0 - 1.0
+
+        self.register_buffer("codebook", codebook, persistent=False)
+
     @property
     def dtype(self):
         return self.project_in.weight.dtype
@@ -209,6 +219,11 @@ class LFQ(nn.Module):
             ret_dict["indices"] = indices
 
         if return_losses:
+            logits = -2 * torch.einsum(
+                "... i d, j d -> ... i j",
+                original_x,
+                self.codebook,
+            )
             loss = entropy_loss(
                 original_x**2,
                 mask,
