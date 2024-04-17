@@ -3,3 +3,5 @@ intermediate_size: 3072
 num_attention_heads: 12
 num_hidden_layers: 12
 patch_size: 32
+max_height: 64
+max_width: 64

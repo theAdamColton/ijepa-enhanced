@@ -13,34 +13,6 @@ from torch._prims_common import TensorSequenceType
 from .tensorset import TensorSet
 
 
-class CropToMultipleOf(nn.Module):
-    """
-    randomly crops the image to a multiple of size
-    """
-
-    def __init__(self, size: int):
-        super().__init__()
-        self.size = size
-
-    def forward(self, image):
-        *_, h, w = image.shape
-        assert h >= self.size
-        assert w >= self.size
-        hf = (h // self.size) * self.size
-        wf = (w // self.size) * self.size
-
-        h_diff = h - hf
-        w_diff = w - wf
-
-        if h_diff == 0 and w_diff == 0:
-            return image
-
-        hs = torch.randint(0, h_diff + 1, (1,))
-        ws = torch.randint(0, w_diff + 1, (1,))
-
-        return image[..., hs : hs + hf, ws : ws + wf]
-
-
 def patch(x: torch.Tensor, patch_size: int):
     """
     x: An image of shape (C H W)
@@ -142,10 +114,12 @@ def sample_rect_mask(
     return mask
 
 
-MASK_IMAGE_ID = -100
+MASK_IMAGE_ID = 0
 
 
-def make_sequence(sequence: List[TensorSet], sequence_length, rng=None) -> TensorSet:
+def make_tensorset_sequence(
+    sequence: List[TensorSet], sequence_length, rng=None
+) -> TensorSet:
     sequence = TensorSet.cat(sequence)
 
     # if the sequence length overflows, randomly drops items in the sequence
@@ -163,6 +137,21 @@ def make_sequence(sequence: List[TensorSet], sequence_length, rng=None) -> Tenso
     return sequence
 
 
+def get_attention_mask(batched_image_ids: torch.LongTensor):
+    """
+    batched_image_ids: A batch of image ids, shape: (B S)
+        where common elements in a batch are identified by identical ids
+
+    returns an attention mask of shape B S S
+    """
+
+    attention_mask = einx.rearrange(
+        "b i -> b i 1", batched_image_ids
+    ) == einx.rearrange("b j -> b 1 j", batched_image_ids)
+    attention_mask = attention_mask & (attention_mask != MASK_IMAGE_ID)
+    return attention_mask
+
+
 class PatchNPacker:
     def __init__(self, patch_size, sequence_length, batch_size, rng=None):
         self.patch_size = patch_size
@@ -170,36 +159,49 @@ class PatchNPacker:
         self.batch_size = batch_size
         self.unpacked_sequences: List[TensorSet] = []
         self.packed_sequences: List[TensorSet] = []
-        self.__id = 0
+        self.__id = 1
         self.rng = rng
+        self._did_flush = False
 
-    def append(self, image, id=None):
+    def append_image(self, image, id=None):
+        assert (
+            id != MASK_IMAGE_ID
+        ), f"{id} cannot be the same as the mask image id {MASK_IMAGE_ID}"
         patches, positions, image_ids = self.patch(image, id)
         self.__id += 1
 
         sequence = TensorSet([patches, positions, image_ids])
 
-        self._pack(sequence)
+        self.append_sequence(sequence)
 
     def patch(self, image, id=None):
         if id == None:
             id = self.__id
+        assert (
+            id != MASK_IMAGE_ID
+        ), f"{id} cannot be the same as the mask image id {MASK_IMAGE_ID}"
         patches, positions = patch(image, self.patch_size)
         s = len(patches)
         image_ids = torch.full((s,), id, dtype=torch.long, device=patches.device)
 
         return patches, positions, image_ids
 
-    def _pack(self, sequence):
+    def _flush_sequence(self):
+        if len(self.unpacked_sequences) == 0:
+            return
+        packed_sequences = make_tensorset_sequence(
+            self.unpacked_sequences, self.sequence_length
+        )
+        self.packed_sequences.append(packed_sequences)
+        self._did_flush = True
+
+    def append_sequence(self, sequence):
+        self._did_flush = False
         s = sum(ts.num_rows for ts in self.unpacked_sequences)
 
         if s + sequence.num_rows > self.sequence_length and s > 0:
-            packed_sequence = make_sequence(
-                self.unpacked_sequences, self.sequence_length
-            )
+            self._flush_sequence()
             self.unpacked_sequences = [sequence]
-
-            self.packed_sequences.append(packed_sequence)
         else:
             self.unpacked_sequences.append(sequence)
 
@@ -207,13 +209,22 @@ class PatchNPacker:
         return len(self.packed_sequences) >= self.batch_size
 
     def pop_batch(self):
+        """
+        returns a TensorSet, which contains the columns (in this order)
+            patches, positions, image_ids
+        """
         if not self.can_pop_batch():
             return None
         batch, self.packed_sequences = (
             self.packed_sequences[: self.batch_size],
             self.packed_sequences[self.batch_size :],
         )
-        return TensorSet.stack(batch)
+        batch = TensorSet.stack(batch)
+        # generates attention mask
+        attention_mask = get_attention_mask(batch.columns[-1])
+        batch.columns.append(attention_mask)
+
+        return batch
 
 
 class ContextTargetPatchNPacker:
@@ -222,7 +233,7 @@ class ContextTargetPatchNPacker:
     You can feed a ContextTargetPatchNPacker images and get back
     batches of context patches, and target patches.
 
-    Context/target patching is used in IJepa to perturb the input signal.
+    Context/target patching is used in IJepa to construct a input/output signal for predictive modelling.
     """
 
     def __init__(
@@ -231,6 +242,7 @@ class ContextTargetPatchNPacker:
         sequence_length_target,
         patch_size,
         batch_size,
+        num_prediction_targets=4,
         rng=None,
     ):
         self.sequence_length_context = sequence_length_context
@@ -245,26 +257,40 @@ class ContextTargetPatchNPacker:
             sequence_length=sequence_length_target,
             batch_size=batch_size,
         )
+        self.num_prediction_targets = num_prediction_targets
+
+        self.all_packers = [
+            self.patchnpacker_context,
+            self.patchnpacker_target,
+        ]
         self.patch_size = patch_size
         self.batch_size = batch_size
         self.rng = rng
 
     def append(self, image, id=None):
         _, h, w = image.shape
+        device = image.device
         nph = h // self.patch_size
         npw = w // self.patch_size
 
-        patches, positions, ids = self.patchnpacker_target.patch(image, id=id)
-        sequence = TensorSet([patches, positions, ids])
-        # if sequence.num_rows > self.sequence_length_target:
-        #     mask = get_sample_mask(
-        #         sequence.num_rows, self.sequence_length_target, self.rng
-        #     )
-        #     mask = mask.to(patches.device)
-        #     sequence = sequence[mask]
+        # contains: patches, positions, image ids
+        # These are patches for the entire image
+        sequence = TensorSet(self.patchnpacker_target.patch(image, id=id))
+        assert sequence.num_rows == nph * npw
 
+        # Randomly downsamples the sequence length if it is too long
+        if sequence.num_rows > self.sequence_length_target:
+            downsample_mask = get_sample_mask(
+                sequence.num_rows, self.sequence_length_target, self.rng
+            )
+            downsample_mask = downsample_mask.to(device)
+            sequence = sequence[downsample_mask]
+        else:
+            downsample_mask = None
+
+        # Samples 4 rectangular target blocks
         target_blocks = []
-        for _ in range(4):
+        for _ in range(self.num_prediction_targets):
             target_block = sample_rect_mask(
                 nph,
                 npw,
@@ -274,30 +300,55 @@ class ContextTargetPatchNPacker:
                 aspect_ratio_ceil=1.5,
                 rng=self.rng,
             ).flatten()
+
+            if downsample_mask is not None:
+                target_block = target_block[downsample_mask]
+
             target_blocks.append(target_block)
 
+        # Samples 1 rectangular context block
         context_block = sample_rect_mask(
             nph, npw, 0.85, 1.0, 1.0, 1.0, rng=self.rng
         ).flatten()
+
+        if downsample_mask is not None:
+            context_block = context_block[downsample_mask]
+
+        # the context block might need to be downsampled to fit inside the max context sequence length
+
+        # target_any is a mask that is true if a patch is part of a target block
+        # shape: nph * npw
         target_any = sum(target_blocks) > 0
+
+        # context is removed wherever the target mask is true,
+        # this is to make it more difficult to predict the target from the context, because they don't overlap
         context_block = context_block & ~target_any
 
-        sequence.columns.append(target_any)
+        # Only contains the patches in the context block
         context_sequence = sequence[context_block]
-        self.patchnpacker_context._pack(context_sequence)
-        self.patchnpacker_target._pack(sequence)
+
+        sequence.columns.extend(target_blocks)
+
+        self.patchnpacker_context.append_sequence(context_sequence)
+        self.patchnpacker_target.append_sequence(sequence)
+
+        # if one of the packers flush, they all have to flush
+        # this keeps them in sync
+        did_flush = any(p._did_flush for p in self.all_packers)
+        if did_flush:
+            for p in self.all_packers:
+                if not p._did_flush:
+                    p._flush_sequence()
 
     def can_pop_batch(self):
-        return (
-            self.patchnpacker_context.can_pop_batch()
-            and self.patchnpacker_target.can_pop_batch()
-        )
+        return all(p.can_pop_batch() for p in self.all_packers)
 
     def pop_batch(self):
+        """
+        returns a context batch and a target batch as a tuple
+        each batch is a TensorSet
+        """
         if not self.can_pop_batch():
             return None
 
-        return (
-            self.patchnpacker_context.pop_batch(),
-            self.patchnpacker_target.pop_batch(),
-        )
+        return tuple(p.pop_batch() for p in self.all_packers)

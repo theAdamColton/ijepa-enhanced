@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 import einx
 
 
@@ -22,7 +23,6 @@ class Attention(nn.Module):
         super().__init__()
         inner_dim = dim_head * heads
         self.heads = heads
-        self.scale = dim_head**-0.5
         self.norm = nn.LayerNorm(dim)
 
         self.attend = nn.Softmax(dim=-1)
@@ -30,21 +30,17 @@ class Attention(nn.Module):
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
         self.to_out = nn.Linear(inner_dim, dim, bias=False)
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
+        """
+        attention_mask: A boolean mask where a value of True indicates that the element should take part in attention
+        """
         x = self.norm(x)
 
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(
-            lambda t: einx.rearrange("b n (h d) -> b h n d", t, h=self.heads), qkv
-        )
+        q, k, v = self.to_qkv(x).chunk(3, dim=-1)
 
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        x = F.scaled_dot_product_attention(q, k, v, attention_mask)
 
-        attn = self.attend(dots)
-
-        out = torch.matmul(attn, v)
-        out = einx.rearrange("b h n d -> b n (h d)", out)
-        return self.to_out(out)
+        return self.to_out(x)
 
 
 class Transformer(nn.Module):
@@ -62,8 +58,8 @@ class Transformer(nn.Module):
                 )
             )
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         for attn, ff in self.layers:
-            x = attn(x) + x
+            x = attn(x, attention_mask) + x
             x = ff(x) + x
         return self.norm(x)

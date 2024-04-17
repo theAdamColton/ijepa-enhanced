@@ -68,3 +68,6 @@ class TensorSet:
             padding.append(pad_col)
         padding = TensorSet(padding)
         return TensorSet.cat([self, padding])
+
+    def to_device_(self, device):
+        self.columns = [c.to(device) for c in self.columns]

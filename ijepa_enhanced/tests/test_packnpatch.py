@@ -36,7 +36,7 @@ class TestPatchNPack(unittest.TestCase):
         patch_size = 32
         packer = patchnpack.PatchNPacker(patch_size, 32, 1)
         images = self.load_test_images(patch_size)
-        [packer.append(image) for image in images]
+        [packer.append_image(image) for image in images]
         while packer.can_pop_batch():
             batch = packer.pop_batch()
             patches, positions, image_ids = batch.columns
@@ -85,7 +85,7 @@ class TestPatchNPack(unittest.TestCase):
                 w = round((w // patch_size) * patch_size)
                 image = torch.empty(c, h, w)
                 images.append(image)
-                packer.append(image)
+                packer.append_image(image)
             while packer.can_pop_batch():
                 batch = packer.pop_batch()
                 patches, positions, image_ids = batch.columns

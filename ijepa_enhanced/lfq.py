@@ -55,9 +55,11 @@ def masked_mean(x, m):
     the mean is taken along the shared leading dims of m
     equivalent to: x[m].mean(tuple(range(m.ndim)))
 
-    The benifit of using masked_mean rather than using
+    The benefit of using masked_mean rather than using
     tensor indexing is that masked_mean is much faster
     for torch-compile on batches.
+
+    The drawback is larger floating point errors
     """
     x = mult_along_first_dims(x, m)
     x = x / m.sum()

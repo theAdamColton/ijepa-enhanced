@@ -1,5 +1,6 @@
 defaults:
   - optimizer: adamw
+  - data: imagenet1k
 batch_size: 4
 num_workers: 1
 mixed_precision: "fp16"
@@ -7,8 +8,6 @@ gradient_accumulation_steps: 1
 resume_checkpoint: ""
 ema:
   beta: 0.996
-context_target_patchnpacker:
-  sequence_length_context: 256
-  sequence_length_target: 1024
-  patch_size: 32
-  batch_size: ${..batch_size}
+sequence_length_context: 256
+sequence_length_target: 1024
+sequence_length_prediction: 256
