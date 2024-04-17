@@ -2,6 +2,8 @@ from typing import Optional
 import torch
 import hydra
 from omegaconf import DictConfig, OmegaConf
+import accelerate
+from torch.utils.data import DataLoader
 
 from ..vit import ViT
 from ..ema import EMA
@@ -30,9 +32,21 @@ def main(config: DictConfig):
 
     dataset = get_dataset(**config.data)
 
+    dataloader = DataLoader(
+        dataset, batch_size=None, num_workers=config.train.num_workers
+    )
+
     len(dataset)
 
     patchnpacker = ContextTargetPatchNPacker(**config.train.context_target_patchnpacker)
+
+    accelerator = accelerate.Accelerator()
+
+    optimizer_cls = getattr(torch.optim, config.train.optimizer.name)
+    optimizer = optimizer_cls(
+        list(vit.parameters()) + list(predictor.parameters()),
+        **config.train.optimizer.args
+    )
 
 
 if __name__ == "__main__":

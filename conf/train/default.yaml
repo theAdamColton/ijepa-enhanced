@@ -1,12 +1,10 @@
+defaults:
+  - optimizer: adamw
 batch_size: 4
+num_workers: 1
+mixed_precision: "fp16"
 gradient_accumulation_steps: 1
 resume_checkpoint: ""
-optimizer: AdamW
-learning_rate: 3e-4
-weight_decay: 0.05
-betas: 
-  - 0.9
-  - 0.99
 ema:
   beta: 0.996
 context_target_patchnpacker:
