@@ -2,3 +2,4 @@ defaults:
   - vit: vit_base_patch32
   - predictor: base
   - train: default
+  - data: imagenet1k

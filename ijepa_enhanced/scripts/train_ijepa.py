@@ -9,6 +9,7 @@ from ..predictor import Predictor
 from ..lfq import LFQ
 from ..patchnpack import ContextTargetPatchNPacker, PatchNPacker
 from ..utils import print_num_parameters
+from ..dataset import get_dataset
 
 
 def train_step(vit, predictor, optimizer):
@@ -27,8 +28,11 @@ def main(config: DictConfig):
     print("predictor: ", end="")
     print_num_parameters(predictor)
 
+    dataset = get_dataset(**config.data)
+
+    len(dataset)
+
     patchnpacker = ContextTargetPatchNPacker(**config.train.context_target_patchnpacker)
-    print(patchnpacker.batch_size)
 
 
 if __name__ == "__main__":

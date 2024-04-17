@@ -1,0 +1,5 @@
+download_url: https://huggingface.co/datasets/timm/imagenet-w21-wds
+type: wds-image
+path: /hdd/imagenet1k/imagenet1k-train-{0000..0010}.tar
+image_column_name: jpg
+max_rows: 1281167
