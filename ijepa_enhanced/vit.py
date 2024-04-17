@@ -6,6 +6,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import einx
+from dataclasses import dataclass
 
 
 class FeedForward(nn.Module):
@@ -92,29 +93,43 @@ class PositionalEmbeddings(nn.Module):
 class ViT(nn.Module):
     def __init__(
         self,
-        dim=512,
-        patch_size=16,
-        image_channels=3,
-        depth=16,
-        heads=16,
-        mlp_dim=4096,
-        dim_head=64,
-        max_height=32,
-        max_width=32,
+        hidden_size: int = 768,
+        patch_size: int = 32,
+        image_channels: int = 3,
+        num_hidden_layers: int = 12,
+        num_attention_heads: int = 12,
+        intermediate_size: int = 3072,
+        dim_head: int = 64,
+        max_height: int = 32,
+        max_width: int = 32,
     ):
         super().__init__()
 
         patch_dim = patch_size**2 * image_channels
+        hidden_size = hidden_size
 
         self.to_patch_embedding = nn.Sequential(
-            nn.LayerNorm(patch_dim), nn.Linear(patch_dim, dim), nn.LayerNorm(dim)
+            nn.LayerNorm(patch_dim),
+            nn.Linear(patch_dim, hidden_size),
+            nn.LayerNorm(hidden_size),
         )
 
-        self.pos_emb = PositionalEmbeddings(dim, max_height, max_width)
+        self.pos_emb = PositionalEmbeddings(hidden_size, max_height, max_width)
 
-        self.model = Transformer(dim, depth, heads, dim_head, mlp_dim)
+        self.model = Transformer(
+            hidden_size,
+            num_hidden_layers,
+            num_attention_heads,
+            dim_head,
+            intermediate_size,
+        )
 
-    def forward(self, x, height_indices, width_indices):
+    def forward(
+        self,
+        x: torch.Tensor,
+        height_indices: torch.LongTensor,
+        width_indices: torch.LongTensor,
+    ):
         """
         x: Image patches, shape (... patch_dim)
         height_indices: Height indices of the patch positions

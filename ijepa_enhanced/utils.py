@@ -32,3 +32,8 @@ def rand_log_uniform(a, b):
     if a == 0.0:
         a = 1e-15
     return math.e ** rand_uniform(math.log(a), math.log(b))
+
+
+def print_num_parameters(model: torch.nn.Module):
+    n = sum(p.numel() for p in model.parameters())
+    print(f"{n/1_000_000} million parameters")
