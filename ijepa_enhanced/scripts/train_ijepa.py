@@ -25,9 +25,7 @@ from ..dataset import get_dataset
 from ..optimizer import get_optimizer
 
 
-def compute_training_loss(
-    vit, teacher, predictor, accelerator, ctx, tgt, sequence_length_prediction=None
-):
+def compute_training_loss(vit, teacher, predictor, accelerator, ctx, tgt, patchnpacker):
     device = accelerator.device
     # Compute target hidden states by passing the target patches through the teacher network
     tgt_patches, tgt_positions, tgt_image_ids, *tgt_block_masks, tgt_attn_mask = (
@@ -68,33 +66,9 @@ def compute_training_loss(
 
     for tgt_block_mask in tgt_block_masks:
 
-        tgt_preds = []
-        for seq_mask, tgt_seq in zip(tgt_block_mask, tgt):
-            tgt_seq = tgt_seq[seq_mask]
-
-            # creates mask
-            pred_mask_seq = torch.ones(
-                tgt_seq.num_rows, device=device, dtype=torch.bool
-            )
-
-            # pads up to the prediction sequence length
-            pad_amt = sequence_length_prediction - tgt_seq.num_rows
-            assert pad_amt >= 0, f"prediction sequence length too long by {-pad_amt}"
-            if pad_amt > 0:
-                tgt_seq = tgt_seq.pad(pad_amt, MASK_IMAGE_ID)
-
-            pred_mask_seq = torch.cat(
-                (
-                    pred_mask_seq,
-                    torch.zeros(pad_amt, device=device, dtype=torch.bool),
-                )
-            )
-            tgt_seq.columns.append(pred_mask_seq)
-
-            tgt_preds.append(tgt_seq)
-
-        tgt_preds = TensorSet.stack(tgt_preds)
-        tgt_preds = TensorSet.cat([tgt_preds, ctx])
+        tgt_preds = patchnpacker.make_prediction_target_sequence(
+            tgt, ctx, tgt_block_mask
+        )
 
         pred_states, pred_positions, pred_image_ids, pred_tgt_mask = tgt_preds.columns
         # redo attention mask
@@ -148,6 +122,7 @@ def main(config: DictConfig):
         batch_size=config.train.batch_size,
         sequence_length_context=config.train.sequence_length_context,
         sequence_length_target=config.train.sequence_length_target,
+        sequence_length_prediction=config.train.sequence_length_prediction,
     )
 
     optimizer = get_optimizer(
@@ -180,7 +155,7 @@ def main(config: DictConfig):
             accelerator,
             ctx,
             tgt,
-            config.train.sequence_length_prediction,
+            patchnpacker,
         )
 
         accelerator.backward(loss)

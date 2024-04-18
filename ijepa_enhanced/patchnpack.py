@@ -279,6 +279,7 @@ class ContextTargetPatchNPacker(MakeIterable):
         self,
         sequence_length_context,
         sequence_length_target,
+        sequence_length_prediction,
         patch_size,
         batch_size,
         num_prediction_targets=4,
@@ -286,6 +287,7 @@ class ContextTargetPatchNPacker(MakeIterable):
     ):
         self.sequence_length_context = sequence_length_context
         self.sequence_length_target = sequence_length_target
+        self.sequence_length_prediction = sequence_length_prediction
         self.patchnpacker_context = PatchNPacker(
             patch_size=patch_size,
             sequence_length=sequence_length_context,
@@ -391,3 +393,56 @@ class ContextTargetPatchNPacker(MakeIterable):
             return None
 
         return tuple(p.pop_batch() for p in self.all_packers)
+
+    def make_prediction_target_sequence(
+        self, tgt_sequence: TensorSet, ctx_sequence: TensorSet, tgt_block_mask
+    ):
+        """
+        tgt_block_mask is a boolean mask of shape (B S) which is set to True for sequence
+         elements that are prediction targets.
+
+        tgt_sequence is a TensorSet containing patches and other sequence data of the data to be predicted
+
+        ctx_sequence is a TensorSet containing patches and other sequence data of the data to be used as the known independant variable
+
+        Returns a TensorSet, where each sequence has the elements to be predicted and the context elements concatenated along the sequence dimension.
+
+        The sequence length of the returned TensorSet is self.sequence_length_prediction + self.sequence_length_context
+
+        TODO could potentially waste less padding by unpacking the ctx_sequence and then repacking it together with the pred_sequence
+        """
+        device = tgt_sequence.columns[0].device
+
+        tgt_seq_packed = []
+        for tgt_seq_mask, tgt_seq in zip(tgt_block_mask, tgt_sequence):
+            tgt_seq = tgt_seq[tgt_seq_mask]
+
+            # creates mask
+            pred_mask_seq = torch.ones(
+                tgt_seq.num_rows, device=device, dtype=torch.bool
+            )
+
+            # pads up to the prediction sequence length
+            pad_amt = self.sequence_length_prediction - tgt_seq.num_rows
+            assert pad_amt >= 0, f"prediction sequence length too long by {-pad_amt}"
+            if pad_amt > 0:
+                tgt_seq = tgt_seq.pad(pad_amt, MASK_IMAGE_ID)
+
+            pred_mask_seq = torch.cat(
+                (
+                    pred_mask_seq,
+                    torch.zeros(pad_amt, device=device, dtype=torch.bool),
+                )
+            )
+            tgt_seq.columns.append(pred_mask_seq)
+
+            tgt_seq_packed.append(tgt_seq)
+
+        tgt_seq_packed = TensorSet.stack(tgt_seq_packed)
+        tgt_seq_packed = TensorSet.cat([tgt_seq_packed, ctx_sequence])
+
+        # pred_states, pred_positions, pred_image_ids, pred_tgt_mask = tgt_preds.columns
+        # # redo attention mask
+        # pred_attn_mask = get_attention_mask(pred_image_ids)
+
+        return tgt_seq_packed
