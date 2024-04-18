@@ -69,8 +69,9 @@ class TensorSet:
         padding = TensorSet(padding)
         return TensorSet.cat([self, padding])
 
-    def to_device_(self, device):
+    def to_device(self, device):
         """
-        in-place to_device_
+        in-place
         """
         self.columns = [c.to(device) for c in self.columns]
+        return self

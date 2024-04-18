@@ -16,7 +16,7 @@ def eval_classification_probe(
     accelerator=None,
 ):
     vit = vit.eval()
-    predictor = predictor.eval()
+    predictor = predictor.train()
     if predictor_head is None:
         predictor_head = torch.nn.Linear(
             predictor.hidden_size,
@@ -29,7 +29,8 @@ def eval_classification_probe(
         vit.patch_size, config.sequence_length, config.batch_size
     )
     optimizer = get_optimizer(
-        config.optimizer, predictor.parameters() + predictor_head.parameters()
+        config.optimizer,
+        list(predictor.parameters()) + list(predictor_head.parameters()),
     )
 
     train_dataset = get_dataset(split="train", **config.dataset)
@@ -49,21 +50,8 @@ def eval_classification_probe(
     _id = 1
 
     id_to_label = dict()
-    while True:
-        if not patchnpacker.can_pop_batch():
-            try:
-                row = next(dataloader)
-            except StopIteration:
-                break
-            pixel_values = row["pixel_values"]
-            label = row["label"]
-            id_to_label[_id] = label
-            patchnpacker.append_image(pixel_values, _id)
-            _id += 1
-            continue
-
-        ctx = patchnpacker.pop_batch()
-        ctx.to_device_(accelerator.device)
+    for ctx in patchnpacker.make_iter(dataloader):
+        ctx.to_device(accelerator.device)
 
         ctx_patches, ctx_positions, ctx_image_ids, ctx_attn_mask = ctx.columns
         ctx_patches = ctx_patches / 255
@@ -111,4 +99,19 @@ def eval_classification_probe(
         if step > config.max_iterations:
             break
 
-    return loss
+    patchnpacker.reset()
+
+    validation_dataset = get_dataset(split="validation", **config.dataset)
+    dataloader = DataLoader(
+        validation_dataset,
+        num_workers=config.num_workers,
+        collate_fn=None,
+        batch_size=None,
+    )
+    dataloader = iter(dataloader)
+
+    for ctx in patchnpacker.make_iter(dataloader):
+        ctx.to_device(device)
+        import bpdb
+
+        bpdb.set_trace()

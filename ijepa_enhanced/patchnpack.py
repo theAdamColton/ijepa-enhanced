@@ -152,7 +152,30 @@ def get_attention_mask(batched_image_ids: torch.LongTensor):
     return attention_mask
 
 
-class PatchNPacker:
+class MakeIterable:
+    def make_iter(self, data_iter):
+        """
+        pass in a data iter which yields rows of data,
+            must contain at least "pixel_values"
+
+        returns a generator that yields batches
+        """
+        while True:
+            if not self.can_pop_batch():
+                try:
+                    row = next(data_iter)
+                except StopIteration:
+                    raise StopIteration()
+                image = row["pixel_values"]
+                label = row.get("label")
+                id = row.get("__id__")
+                self.append_image(image, id)
+                continue
+
+            yield self.pop_batch()
+
+
+class PatchNPacker(MakeIterable):
     def __init__(self, patch_size, sequence_length, batch_size, rng=None):
         self.patch_size = patch_size
         self.sequence_length = sequence_length
@@ -196,6 +219,12 @@ class PatchNPacker:
 
         return patches, positions, image_ids
 
+    def reset(self):
+        self.packed_sequences = []
+        self.unpacked_sequences = []
+        self._did_flush = False
+        self.__id = 1
+
     def _flush_sequence(self):
         if len(self.unpacked_sequences) == 0:
             return
@@ -237,7 +266,7 @@ class PatchNPacker:
         return batch
 
 
-class ContextTargetPatchNPacker:
+class ContextTargetPatchNPacker(MakeIterable):
     """
     Allows PackNPatch to be used with context and target patches.
     You can feed a ContextTargetPatchNPacker images and get back

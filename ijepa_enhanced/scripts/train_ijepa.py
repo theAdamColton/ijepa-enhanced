@@ -161,32 +161,17 @@ def main(config: DictConfig):
         vit, predictor, teacher, optimizer
     )
 
-    training_done = False
-
     id = 1
 
     step = 0
 
     dataloader = iter(dataloader)
 
-    while not training_done:
-        if not patchnpacker.can_pop_batch():
-            image = None
-            try:
-                image = next(dataloader)["pixel_values"]
-            except StopIteration:
-                training_done = True
-
-            if image is not None:
-                patchnpacker.append_image(image, id)
-            id += 1
-            continue
-
+    for ctx, tgt in patchnpacker.make_iter(dataloader):
         optimizer.zero_grad()
 
-        ctx, tgt = patchnpacker.pop_batch()
-        ctx.to_device_(device)
-        tgt.to_device_(device)
+        ctx.to_device(device)
+        tgt.to_device(device)
 
         loss = compute_training_loss(
             vit,
