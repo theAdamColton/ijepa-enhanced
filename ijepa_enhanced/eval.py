@@ -13,7 +13,6 @@ def eval_classification_probe(
     config,
     predictor_head=None,
     accelerator=None,
-    max_iterations=9000,
 ):
 
     patchnpacker = PatchNPacker(
@@ -42,6 +41,7 @@ def eval_classification_probe(
         vit, predictor, predictor_head, optimizer
     )
 
+    step = 0
     _id = 1
 
     id_to_label = dict()
@@ -96,8 +96,13 @@ def eval_classification_probe(
             logits = predictor_head(all_hidden_states)
 
         loss = F.cross_entropy(logits, all_labels)
-        print("classification loss", loss)
+        print(f"eval loss {loss:.4f} step {step}")
 
         accelerator.backward(loss)
         optimizer.step()
         optimizer.zero_grad()
+
+        step += 1
+
+        if step > config.max_iterations:
+            break

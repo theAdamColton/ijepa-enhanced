@@ -126,6 +126,12 @@ def get_dataset(
     returns a iterable, where each row of the iterable will have an accessible 'pixel_values',
      which will be a uint8 3D array: c,h,w torch tensor
     """
+    print(f"loading dataset...")
+    if max_res:
+        print(f"  max resolution: {max_res}")
+    if crop_to_resolution_multiple_of:
+        print(f"  crop to resolution multiple of: {crop_to_resolution_multiple_of}")
+
     if type == "hf-image":
         ds = datasets.load_dataset(
             path,

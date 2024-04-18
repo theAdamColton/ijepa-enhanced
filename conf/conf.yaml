@@ -4,6 +4,8 @@ defaults:
   - train: default
   - eval: food101
 
+torch_compile: True
+
 train:
   dataset:
     crop_to_resolution_multiple_of: ${model.vit.patch_size}
@@ -14,6 +16,8 @@ eval:
   num_workers: ${train.num_workers}
   sequence_length: ${train.sequence_length_target}
   optimizer: ${train.optimizer}
+  max_iterations: 30
 
   dataset:
     crop_to_resolution_multiple_of: ${model.vit.patch_size}
+

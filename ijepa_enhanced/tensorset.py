@@ -70,4 +70,7 @@ class TensorSet:
         return TensorSet.cat([self, padding])
 
     def to_device_(self, device):
+        """
+        in-place to_device_
+        """
         self.columns = [c.to(device) for c in self.columns]
