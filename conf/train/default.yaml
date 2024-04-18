@@ -1,6 +1,5 @@
 defaults:
   - optimizer: adamw
-  - data: imagenet1k
 batch_size: 4
 num_workers: 1
 mixed_precision: "fp16"
@@ -11,3 +10,7 @@ ema:
 sequence_length_context: 256
 sequence_length_target: 1024
 sequence_length_prediction: 256
+dataset:
+  path: /hdd/imagenet1k/imagenet1k-train-{0000..1023}.tar
+  type: wds-image
+  image_column_name: jpg

@@ -111,7 +111,7 @@ class TestPatchNPack(unittest.TestCase):
         )
         images = self.load_test_images(patch_size)
         image_ids = list(range(len(images)))
-        [ctpacker.append(image, id) for image, id in zip(images, image_ids)]
+        [ctpacker.append_image(image, id) for image, id in zip(images, image_ids)]
         batches = []
         while ctpacker.can_pop_batch():
             batches.append(ctpacker.pop_batch())

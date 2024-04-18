@@ -19,7 +19,8 @@ class PositionalEmbeddings(nn.Module):
         self.h_emb = nn.Embedding(max_height, dim)
         self.w_emb = nn.Embedding(max_width, dim)
 
-    def forward(self, h_indices, w_indices):
+    def forward(self, position_ids):
+        h_indices, w_indices = position_ids.unbind(-1)
         return self.h_emb(h_indices) + self.w_emb(w_indices)
 
 
@@ -38,6 +39,7 @@ class ViT(nn.Module):
     ):
         super().__init__()
 
+        self.patch_size = patch_size
         patch_dim = patch_size**2 * image_channels
         hidden_size = hidden_size
 
@@ -61,8 +63,7 @@ class ViT(nn.Module):
         self,
         x: torch.Tensor,
         attention_mask: torch.BoolTensor,
-        height_indices: torch.LongTensor,
-        width_indices: torch.LongTensor,
+        position_indices: torch.LongTensor,
     ):
         """
         x: Image patches, shape (... patch_dim)
@@ -71,6 +72,6 @@ class ViT(nn.Module):
         """
 
         x = self.to_patch_embedding(x)
-        x = x + self.pos_emb(height_indices, width_indices)
+        x = x + self.pos_emb(position_indices)
         x = self.model(x, attention_mask)
         return x

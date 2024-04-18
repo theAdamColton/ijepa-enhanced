@@ -1,4 +1,19 @@
 defaults:
-  - vit: vit_base_patch32
-  - predictor: base
+  - _self_
+  - model: base_patch32
   - train: default
+  - eval: food101
+
+train:
+  dataset:
+    crop_to_resolution_multiple_of: ${model.vit.patch_size}
+
+
+eval:
+  batch_size: ${train.batch_size}
+  num_workers: ${train.num_workers}
+  sequence_length: ${train.sequence_length_target}
+  optimizer: ${train.optimizer}
+
+  dataset:
+    crop_to_resolution_multiple_of: ${model.vit.patch_size}

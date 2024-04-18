@@ -1,0 +1,5 @@
+dataset:
+  path: food101
+  type: hf-image
+  num_classes: 101
+

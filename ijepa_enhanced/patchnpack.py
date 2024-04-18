@@ -163,14 +163,24 @@ class PatchNPacker:
         self.rng = rng
         self._did_flush = False
 
-    def append_image(self, image, id=None):
+    def append_image(
+        self,
+        image,
+        id=None,
+    ):
         assert (
             id != MASK_IMAGE_ID
         ), f"{id} cannot be the same as the mask image id {MASK_IMAGE_ID}"
         patches, positions, image_ids = self.patch(image, id)
         self.__id += 1
 
-        sequence = TensorSet([patches, positions, image_ids])
+        sequence = TensorSet(
+            [
+                patches,
+                positions,
+                image_ids,
+            ]
+        )
 
         self.append_sequence(sequence)
 
@@ -267,7 +277,7 @@ class ContextTargetPatchNPacker:
         self.batch_size = batch_size
         self.rng = rng
 
-    def append(self, image, id=None):
+    def append_image(self, image, id=None):
         _, h, w = image.shape
         device = image.device
         nph = h // self.patch_size

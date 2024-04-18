@@ -17,7 +17,7 @@ if __name__ == "__main__":
     n_processed = 0
 
     while n_processed < n_images_to_process:
-        ctpacker.append(random.choice(images))
+        ctpacker.append_image(random.choice(images))
         if ctpacker.can_pop_batch():
             batch = ctpacker.pop_batch()
             n_processed += batch_size

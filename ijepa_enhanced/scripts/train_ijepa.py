@@ -20,6 +20,7 @@ from ..patchnpack import (
 )
 from ..utils import print_num_parameters
 from ..dataset import get_dataset
+from ..optimizer import get_optimizer
 
 
 def train_step(vit, predictor, optimizer):
@@ -30,7 +31,7 @@ def train_step(vit, predictor, optimizer):
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
 
-    vit = ViT(**config.vit)
+    vit = ViT(**config.model.vit)
     teacher = EMA(vit, **config.train.ema)
     print("vit: ", end="")
     print_num_parameters(vit)
@@ -38,8 +39,10 @@ def main(config: DictConfig):
     print("predictor: ", end="")
     print_num_parameters(predictor)
 
-    max_res = config.vit.patch_size * min(config.vit.max_height, config.vit.max_width)
-    dataset = get_dataset(max_res=max_res, **config.train.data)
+    max_res = config.model.vit.patch_size * min(
+        config.model.vit.max_height, config.model.vit.max_width
+    )
+    dataset = get_dataset(max_res=max_res, **config.train.dataset)
 
     dataloader = DataLoader(
         dataset,
@@ -48,16 +51,14 @@ def main(config: DictConfig):
     )
 
     patchnpacker = ContextTargetPatchNPacker(
-        patch_size=config.vit.patch_size,
+        patch_size=config.model.vit.patch_size,
         batch_size=config.train.batch_size,
         sequence_length_context=config.train.sequence_length_context,
         sequence_length_target=config.train.sequence_length_target,
     )
 
-    optimizer_cls = getattr(torch.optim, config.train.optimizer.name)
-    optimizer = optimizer_cls(
-        list(vit.parameters()) + list(predictor.parameters()),
-        **config.train.optimizer.args,
+    optimizer = get_optimizer(
+        config.train.optimizer, list(vit.parameters()) + list(predictor.parameters())
     )
 
     accelerator = accelerate.Accelerator()
@@ -82,13 +83,13 @@ def main(config: DictConfig):
                 training_done = True
 
             if image is not None:
-                patchnpacker.append(image, id)
+                patchnpacker.append_image(image, id)
             id += 1
             continue
 
         optimizer.zero_grad()
 
-        ctx, tgt, *pred_tgt = patchnpacker.pop_batch()
+        ctx, tgt = patchnpacker.pop_batch()
 
         tgt.to_device_(device)
         tgt_patches, tgt_positions, tgt_image_ids, *tgt_block_masks, tgt_attn_mask = (
@@ -101,9 +102,7 @@ def main(config: DictConfig):
 
         with torch.no_grad():
             with accelerator.autocast():
-                tgt_states = teacher(
-                    tgt_patches, tgt_attn_mask, *tgt_positions.unbind(-1)
-                )
+                tgt_states = teacher(tgt_patches, tgt_attn_mask, tgt_positions)
 
         ctx.to_device_(device)
         ctx_patches, ctx_positions, ctx_image_ids, ctx_attn_mask = ctx.columns
@@ -113,7 +112,7 @@ def main(config: DictConfig):
         ctx_sequence_length = ctx_patches.shape[1]
 
         with accelerator.autocast():
-            ctx_states = vit(ctx_patches, ctx_attn_mask, *ctx_positions.unbind(-1))
+            ctx_states = vit(ctx_patches, ctx_attn_mask, ctx_positions)
 
         # replaces the tgt patches with the tgt_states
         tgt = TensorSet([tgt_states, tgt_positions, tgt_image_ids], is_batched=True)
@@ -168,10 +167,7 @@ def main(config: DictConfig):
 
             with accelerator.autocast():
                 y = predictor(
-                    pred_states,
-                    pred_attn_mask,
-                    pred_tgt_mask,
-                    *pred_positions.unbind(-1),
+                    pred_states, pred_attn_mask, pred_tgt_mask, pred_positions
                 )
 
             # l1
