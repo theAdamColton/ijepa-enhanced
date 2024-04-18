@@ -6,6 +6,7 @@ import scipy
 from torch.nn import CrossEntropyLoss
 from .. import patchnpack
 from ..utils import imread, imshow
+from ..dataset import CropToMultipleOf
 import os
 
 
@@ -18,13 +19,13 @@ class TestPatchNPack(unittest.TestCase):
     def load_test_images(self, patch_size):
         images = ["images/" + f for f in os.listdir("./images/")]
         images = [imread(image) for image in images]
-        images = [patchnpack.CropToMultipleOf(patch_size)(image) for image in images]
+        images = [CropToMultipleOf(patch_size)(image) for image in images]
         return images
 
     def test_patch_unpack(self):
         patch_size = 16
         image = imread("images/dog-512x683.jpg")
-        image = patchnpack.CropToMultipleOf(patch_size)(image)
+        image = CropToMultipleOf(patch_size)(image)
         patches, positions = patchnpack.patch(image, patch_size)
         ids = torch.full((len(patches),), 0)
         image_hat = patchnpack.unpack(patches, positions, ids, patch_size, 3)[0]
@@ -49,7 +50,7 @@ class TestPatchNPack(unittest.TestCase):
     def test_patchnpack_pipe(self):
         image = imread("./images/dog-512x683.jpg")
         p = 32
-        image = patchnpack.CropToMultipleOf(p)(image)
+        image = CropToMultipleOf(p)(image)
         patches = patchnpack.patch(image, p)
 
     def test_crop_to_multiple(self):
@@ -59,7 +60,7 @@ class TestPatchNPack(unittest.TestCase):
             h = random.randint(p, 333)
             w = random.randint(p, 333)
             im = torch.empty(h, w)
-            im = patchnpack.CropToMultipleOf(p)(im)
+            im = CropToMultipleOf(p)(im)
             self.assertEqual(im.shape[0] % p, 0)
             self.assertEqual(im.shape[1] % p, 0)
 
@@ -105,9 +106,15 @@ class TestPatchNPack(unittest.TestCase):
         random.seed(42)
         patch_size = 16
         sequence_length_context = 256
+        sequence_length_prediction = 256
         sequence_length_target = 512
         ctpacker = patchnpack.ContextTargetPatchNPacker(
-            sequence_length_context, sequence_length_target, patch_size, 2, rng=rng
+            sequence_length_context,
+            sequence_length_target,
+            sequence_length_prediction,
+            patch_size,
+            2,
+            rng=rng,
         )
         images = self.load_test_images(patch_size)
         image_ids = list(range(len(images)))

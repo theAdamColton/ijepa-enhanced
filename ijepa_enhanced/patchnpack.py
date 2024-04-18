@@ -114,7 +114,7 @@ def sample_rect_mask(
     return mask
 
 
-MASK_IMAGE_ID = 0
+MASK_IMAGE_ID = -100
 
 
 def make_tensorset_sequence(
@@ -259,9 +259,6 @@ class PatchNPacker(MakeIterable):
             self.packed_sequences[self.batch_size :],
         )
         batch = TensorSet.stack(batch)
-        # generates attention mask
-        attention_mask = get_attention_mask(batch.columns[-1])
-        batch.columns.append(attention_mask)
 
         return batch
 

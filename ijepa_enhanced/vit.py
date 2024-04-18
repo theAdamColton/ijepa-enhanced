@@ -5,6 +5,7 @@ Some parts adapted from simple-vit from https://github.com/lucidrains/vit-pytorc
 import torch
 from torch import nn
 
+from .patchnpack import MASK_IMAGE_ID
 from .transformer import Transformer
 
 
@@ -20,6 +21,7 @@ class PositionalEmbeddings(nn.Module):
         self.w_emb = nn.Embedding(max_width, dim)
 
     def forward(self, position_ids):
+        position_ids = position_ids.where(position_ids == MASK_IMAGE_ID, 0)
         h_indices, w_indices = position_ids.unbind(-1)
         return self.h_emb(h_indices) + self.w_emb(w_indices)
 

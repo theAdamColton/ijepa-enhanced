@@ -1,3 +1,4 @@
+import numpy as np
 import datetime
 import unittest
 import torch
@@ -62,6 +63,12 @@ class TestLFQ(unittest.TestCase):
     def test_convergence_image_quant(self):
         """
         use downproj, lfq, upproj to compress simple image
+
+
+        Uses a bunch of random hyperparameters,
+        makes sure that on average the loss goes down
+
+        To really make sure this works you want to check the outputted images
         """
         dirname = (
             "./test-files/test-lfq-image-compression/"
@@ -73,7 +80,8 @@ class TestLFQ(unittest.TestCase):
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         torch.manual_seed(42)
-        for _ in range(200):
+        loss_diffs = []
+        for _ in range(10):
             d = dict(
                 learning_rate=rand_log_uniform(1e-1, 1e-5),
                 entropy_weight=rand_log_uniform(1e0, 1e-5),
@@ -83,10 +91,16 @@ class TestLFQ(unittest.TestCase):
                 temperature=rand_log_uniform(100, 0.1),
             )
 
-            loss, perplexity, xhat = do_train(device=device, **d)
+            result_dict = do_train(device=device, iterations=50, **d)
+            xhat = result_dict["xhat"]
+            start_loss = result_dict["start_loss"]
+            end_loss = result_dict["end_loss"]
+            perplexity = result_dict["perplexity"]
+
+            loss_diffs.append(end_loss - start_loss)
 
             run_string = " ".join([f"{k}:{v:.5f}" for k, v in d.items()])
-            run_string += f" loss {loss.item():.5f} perplexity {perplexity.item():.5f}"
+            run_string += f" loss {end_loss:.5f} perplexity {perplexity:.5f}"
 
             print(run_string)
 
@@ -95,6 +109,8 @@ class TestLFQ(unittest.TestCase):
                 dirname + run_string + ".jpg",
                 100,
             )
+
+        self.assertLess(np.array(loss_diffs).mean(), 0)
 
 
 def do_train(
@@ -139,6 +155,8 @@ def do_train(
         list(inproj.parameters()) + list(lfq.parameters()) + list(outproj.parameters()),
         lr=learning_rate,
     )
+
+    start_loss = None
     for i in range(iterations):
         z = inproj(patches)
         z, indices, entropy_loss, commit_loss = lfq(
@@ -146,6 +164,9 @@ def do_train(
         )
         xhat = outproj(z)
         loss = F.mse_loss(patches, xhat)
+        if i == 0:
+            start_loss = loss.item()
+
         loss = loss + entropy_loss * entropy_weight + commit_loss * commit_weight
         loss.backward()
         optim.step()
@@ -153,9 +174,11 @@ def do_train(
 
     perplexity = calculate_perplexity(indices, codebook_size)
     xhat = xhat.clamp_(0, 1)
-    loss = F.mse_loss(patches, xhat)
+    end_loss = F.mse_loss(patches, xhat).item()
     xhat = einx.rearrange(
         "nh nw (ph pw c) -> c (nh ph) (nw pw)", xhat, ph=patch_size, pw=patch_size, c=c
     ).cpu()
 
-    return loss, perplexity, xhat
+    return dict(
+        start_loss=start_loss, end_loss=end_loss, perplexity=perplexity, xhat=xhat
+    )
