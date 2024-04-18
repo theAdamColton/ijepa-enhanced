@@ -99,7 +99,7 @@ class TestPatchNPack(unittest.TestCase):
                     images = patchnpack.unpack(
                         patch_seq, pos_seq, image_ids_seq, patch_size, c
                     )
-                self.assertEqual(sequence_length, batch.num_rows)
+                self.assertEqual(sequence_length, batch.sequence_length)
 
     def test_context_target_images(self):
         rng = torch.manual_seed(42)

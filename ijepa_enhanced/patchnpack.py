@@ -123,13 +123,13 @@ def make_tensorset_sequence(
     sequence = TensorSet.cat(sequence)
 
     # if the sequence length overflows, randomly drops items in the sequence
-    needs_drop = sequence.num_rows > sequence_length
+    needs_drop = sequence.sequence_length > sequence_length
     if needs_drop:
-        mask = get_sample_mask(sequence.num_rows, sequence_length, rng)
+        mask = get_sample_mask(sequence.sequence_length, sequence_length, rng)
         sequence = sequence[mask]
 
     # if the sequence length is too short, pads
-    pad_amt = sequence_length - sequence.num_rows
+    pad_amt = sequence_length - sequence.sequence_length
     needs_pad = pad_amt > 0
     if needs_pad:
         sequence = sequence.pad(pad_amt, MASK_IMAGE_ID)
@@ -137,7 +137,7 @@ def make_tensorset_sequence(
     return sequence
 
 
-def get_attention_mask(batched_image_ids: torch.LongTensor):
+def get_attention_mask(batched_image_ids: torch.LongTensor) -> torch.BoolTensor:
     """
     batched_image_ids: A batch of image ids, shape: (B S)
         where common elements in a batch are identified by identical ids
@@ -236,9 +236,9 @@ class PatchNPacker(MakeIterable):
 
     def append_sequence(self, sequence):
         self._did_flush = False
-        s = sum(ts.num_rows for ts in self.unpacked_sequences)
+        s = sum(ts.sequence_length for ts in self.unpacked_sequences)
 
-        if s + sequence.num_rows > self.sequence_length and s > 0:
+        if s + sequence.sequence_length > self.sequence_length and s > 0:
             self._flush_sequence()
             self.unpacked_sequences = [sequence]
         else:
@@ -314,12 +314,12 @@ class ContextTargetPatchNPacker(MakeIterable):
         # contains: patches, positions, image ids
         # These are patches for the entire image
         sequence = TensorSet(self.patchnpacker_target.patch(image, id=id))
-        assert sequence.num_rows == nph * npw
+        assert sequence.sequence_length == nph * npw
 
         # Randomly downsamples the sequence length if it is too long
-        if sequence.num_rows > self.sequence_length_target:
+        if sequence.sequence_length > self.sequence_length_target:
             downsample_mask = get_sample_mask(
-                sequence.num_rows, self.sequence_length_target, self.rng
+                sequence.sequence_length, self.sequence_length_target, self.rng
             )
             downsample_mask = downsample_mask.to(device)
             sequence = sequence[downsample_mask]
@@ -392,15 +392,15 @@ class ContextTargetPatchNPacker(MakeIterable):
         return tuple(p.pop_batch() for p in self.all_packers)
 
     def make_prediction_target_sequence(
-        self, tgt_sequence: TensorSet, ctx_sequence: TensorSet, tgt_block_mask
+        self, tgt: TensorSet, ctx: TensorSet, tgt_block_mask
     ):
         """
         tgt_block_mask is a boolean mask of shape (B S) which is set to True for sequence
          elements that are prediction targets.
 
-        tgt_sequence is a TensorSet containing patches and other sequence data of the data to be predicted
+        tgt is a TensorSet containing patches and other sequence data of the data to be predicted
 
-        ctx_sequence is a TensorSet containing patches and other sequence data of the data to be used as the known independant variable
+        ctx is a TensorSet containing patches and other sequence data of the data to be used as the known independant variable
 
         Returns a TensorSet, where each sequence has the elements to be predicted and the context elements concatenated along the sequence dimension.
 
@@ -408,20 +408,22 @@ class ContextTargetPatchNPacker(MakeIterable):
 
         TODO could potentially waste less padding by unpacking the ctx_sequence and then repacking it together with the pred_sequence
         """
-        device = tgt_sequence.columns[0].device
+        device = tgt.columns[0].device
 
         tgt_seq_packed = []
-        for tgt_seq_mask, tgt_seq in zip(tgt_block_mask, tgt_sequence):
+        for tgt_seq_mask, tgt_seq in zip(tgt_block_mask, tgt):
             tgt_seq = tgt_seq[tgt_seq_mask]
 
             # creates mask
             pred_mask_seq = torch.ones(
-                tgt_seq.num_rows, device=device, dtype=torch.bool
+                tgt_seq.sequence_length, device=device, dtype=torch.bool
             )
 
             # pads up to the prediction sequence length
-            pad_amt = self.sequence_length_prediction - tgt_seq.num_rows
-            assert pad_amt >= 0, f"prediction sequence length too long by {-pad_amt}"
+            pad_amt = self.sequence_length_prediction - tgt_seq.sequence_length
+            assert (
+                pad_amt >= 0
+            ), f"prediction sequence length {tgt_seq.sequence_length} too long by {-pad_amt}"
             if pad_amt > 0:
                 tgt_seq = tgt_seq.pad(pad_amt, MASK_IMAGE_ID)
 
@@ -436,10 +438,6 @@ class ContextTargetPatchNPacker(MakeIterable):
             tgt_seq_packed.append(tgt_seq)
 
         tgt_seq_packed = TensorSet.stack(tgt_seq_packed)
-        tgt_seq_packed = TensorSet.cat([tgt_seq_packed, ctx_sequence])
-
-        # pred_states, pred_positions, pred_image_ids, pred_tgt_mask = tgt_preds.columns
-        # # redo attention mask
-        # pred_attn_mask = get_attention_mask(pred_image_ids)
+        tgt_seq_packed = TensorSet.cat([tgt_seq_packed, ctx])
 
         return tgt_seq_packed

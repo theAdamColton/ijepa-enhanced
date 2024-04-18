@@ -4,7 +4,7 @@ import accelerate
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from .dataset import get_dataset
-from .patchnpack import MASK_IMAGE_ID, PatchNPacker
+from .patchnpack import MASK_IMAGE_ID, PatchNPacker, get_attention_mask
 from .optimizer import get_optimizer
 
 
@@ -53,7 +53,8 @@ def eval_classification_probe(
     for ctx in patchnpacker.make_iter(dataloader):
         ctx.to_device(accelerator.device)
 
-        ctx_patches, ctx_positions, ctx_image_ids, ctx_attn_mask = ctx.columns
+        ctx_patches, ctx_positions, ctx_image_ids = ctx.columns
+        ctx_attn_mask = get_attention_mask(ctx_image_ids)
         ctx_patches = ctx_patches / 255
 
         with torch.no_grad():

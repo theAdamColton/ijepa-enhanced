@@ -25,20 +25,29 @@ from ..dataset import get_dataset
 from ..optimizer import get_optimizer
 
 
-def compute_training_loss(vit, teacher, predictor, accelerator, ctx, tgt, patchnpacker):
+def compute_training_loss(
+    vit: ViT,
+    teacher: EMA,
+    predictor: Predictor,
+    accelerator,
+    ctx: TensorSet,
+    tgt: TensorSet,
+    patchnpacker: ContextTargetPatchNPacker,
+):
     device = accelerator.device
     # Compute target hidden states by passing the target patches through the teacher network
-    tgt_patches, tgt_positions, tgt_image_ids, *tgt_block_masks, tgt_attn_mask = (
-        tgt.columns
-    )
+    tgt_patches, tgt_positions, tgt_image_ids, *tgt_block_masks = tgt.columns
     tgt_patches = tgt_patches / 255
+    tgt_attn_mask = get_attention_mask(tgt_image_ids)
 
     with torch.no_grad():
         with accelerator.autocast():
             tgt_states = teacher(tgt_patches, tgt_attn_mask, tgt_positions)
 
     # Compute the context hidden states by using the vit with gradients enabled
-    ctx_patches, ctx_positions, ctx_image_ids, ctx_attn_mask = ctx.columns
+    ctx_patches, ctx_positions, ctx_image_ids = ctx.columns
+    ctx_attn_mask = get_attention_mask(ctx_image_ids)
+
     ctx_patches = ctx_patches / 255
 
     ctx_batch_size = ctx_patches.shape[0]
@@ -48,7 +57,9 @@ def compute_training_loss(vit, teacher, predictor, accelerator, ctx, tgt, patchn
         ctx_states = vit(ctx_patches, ctx_attn_mask, ctx_positions)
 
     # replaces the tgt patches with the tgt_states
-    tgt = TensorSet([tgt_states, tgt_positions, tgt_image_ids], is_batched=True)
+    tgt = TensorSet(
+        [tgt_states, tgt_positions, tgt_image_ids], sequence_dim=tgt.sequence_dim
+    )
 
     # building block for masking out preds
     ctx_pred_mask = torch.zeros(
@@ -56,7 +67,8 @@ def compute_training_loss(vit, teacher, predictor, accelerator, ctx, tgt, patchn
     )
 
     ctx = TensorSet(
-        [ctx_states, ctx_positions, ctx_image_ids, ctx_pred_mask], is_batched=True
+        [ctx_states, ctx_positions, ctx_image_ids, ctx_pred_mask],
+        sequence_dim=ctx.sequence_dim,
     )
 
     # Compute the loss from each target block mask and take the mean
@@ -65,7 +77,6 @@ def compute_training_loss(vit, teacher, predictor, accelerator, ctx, tgt, patchn
     all_loss = []
 
     for tgt_block_mask in tgt_block_masks:
-
         tgt_preds = patchnpacker.make_prediction_target_sequence(
             tgt, ctx, tgt_block_mask
         )
@@ -90,7 +101,11 @@ def compute_training_loss(vit, teacher, predictor, accelerator, ctx, tgt, patchn
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
 
-    wandb.init(name="ijepa-enhanced", config=config)
+    wandb.init(
+        name="ijepa-enhanced",
+        config=config,
+        mode=config.wandb_mode,
+    )
 
     vit = ViT(**config.model.vit)
 

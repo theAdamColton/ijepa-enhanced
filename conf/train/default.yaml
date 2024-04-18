@@ -1,6 +1,6 @@
 defaults:
   - optimizer: adamw
-batch_size: 16
+batch_size: 4
 num_workers: 1
 mixed_precision: "fp16"
 gradient_accumulation_steps: 1
@@ -8,8 +8,8 @@ resume_checkpoint: ""
 ema:
   beta: 0.996
 sequence_length_context: 256
-sequence_length_target: 1024
-sequence_length_prediction: 256
+sequence_length_target: 512
+sequence_length_prediction: 512
 eval_every_num_steps: 50
 dataset:
   path: /hdd/imagenet1k/imagenet1k-train-{0000..1023}.tar

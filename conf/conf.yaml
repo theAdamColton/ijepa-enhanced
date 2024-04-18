@@ -4,7 +4,7 @@ defaults:
   - train: default
   - eval: food101
 
-torch_compile: True
+torch_compile: False
 
 train:
   dataset:
@@ -21,3 +21,4 @@ eval:
   dataset:
     crop_to_resolution_multiple_of: ${model.vit.patch_size}
 
+wandb_mode: disabled
