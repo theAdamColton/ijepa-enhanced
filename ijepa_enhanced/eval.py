@@ -1,3 +1,4 @@
+import wandb
 import torch
 import accelerate
 import torch.nn.functional as F
@@ -14,11 +15,22 @@ def eval_classification_probe(
     predictor_head=None,
     accelerator=None,
 ):
+    vit = vit.eval()
+    predictor = predictor.eval()
+    if predictor_head is None:
+        predictor_head = torch.nn.Linear(
+            predictor.hidden_size,
+            config.dataset.num_classes,
+            bias=False,
+            device=accelerator.device,
+        )
 
     patchnpacker = PatchNPacker(
         vit.patch_size, config.sequence_length, config.batch_size
     )
-    optimizer = get_optimizer(config.optimizer, predictor.parameters())
+    optimizer = get_optimizer(
+        config.optimizer, predictor.parameters() + predictor_head.parameters()
+    )
 
     train_dataset = get_dataset(split="train", **config.dataset)
     dataloader = DataLoader(
@@ -28,14 +40,6 @@ def eval_classification_probe(
 
     if accelerator is None:
         accelerator = accelerate.Accelerator()
-
-    if predictor_head is None:
-        predictor_head = torch.nn.Linear(
-            predictor.hidden_size,
-            config.dataset.num_classes,
-            bias=False,
-            device=accelerator.device,
-        )
 
     vit, predictor, predictor_head, optimizer = accelerator.prepare(
         vit, predictor, predictor_head, optimizer
@@ -106,3 +110,5 @@ def eval_classification_probe(
 
         if step > config.max_iterations:
             break
+
+    return loss

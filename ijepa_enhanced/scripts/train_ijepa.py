@@ -1,3 +1,4 @@
+import copy
 from typing import Optional
 import torch
 import torch.nn.functional as F
@@ -5,6 +6,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import accelerate
 from torch.utils.data import DataLoader
+import wandb
 
 from ijepa_enhanced.tensorset import TensorSet
 
@@ -114,6 +116,8 @@ def compute_training_loss(
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
 
+    wandb.init(name="ijepa-enhanced", config=config)
+
     vit = ViT(**config.model.vit)
 
     teacher = EMA(vit, **config.train.ema)
@@ -200,9 +204,15 @@ def main(config: DictConfig):
         teacher.update()
 
         print(f"train loss: {loss.item():.5f} step {step}")
+        wandb.log({"train": {"loss": loss}}, step=step)
 
         if (step + 1) % config.train.eval_every_num_steps == 0:
-            eval_classification_probe(vit, predictor, config.eval, None, accelerator)
+            loss = eval_classification_probe(
+                vit, copy.deepcopy(predictor), config.eval, None, accelerator
+            )
+            wandb.log({"eval": {"loss": loss}})
+            vit.train()
+            predictor.train()
 
         step += 1
 
