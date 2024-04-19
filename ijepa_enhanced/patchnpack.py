@@ -165,7 +165,7 @@ class MakeIterable:
                 try:
                     row = next(data_iter)
                 except StopIteration:
-                    raise StopIteration()
+                    return
                 image = row["pixel_values"]
 
                 id = row.get("__id__")

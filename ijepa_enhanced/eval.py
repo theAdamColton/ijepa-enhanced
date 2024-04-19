@@ -72,6 +72,11 @@ def eval_classification_probe(
             device=device,
         )
 
+    if config.torch_compile:
+        vit.forward = torch.compile(vit.forward)
+        predictor.forward = torch.compile(predictor.forward)
+        predictor_head.forward = torch.compile(predictor_head.forward)
+
     patchnpacker = PatchNPacker(
         vit.patch_size, config.sequence_length, config.batch_size
     )
@@ -138,11 +143,13 @@ def eval_classification_probe(
 
         preds = logits.argmax(-1)
 
-        all_preds.append(preds)
-        all_labels.append(labels)
+        all_preds.append(preds.cpu())
+        all_labels.append(labels.cpu())
 
         progress_bar.update(len(preds))
 
-    import bpdb
+    all_preds = torch.cat(all_preds)
+    all_labels = torch.cat(all_labels)
+    accuracy = ((all_preds == all_labels) * 1.0).mean()
 
-    bpdb.set_trace()
+    print("accuracy:", accuracy)
