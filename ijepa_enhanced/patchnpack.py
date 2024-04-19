@@ -167,9 +167,15 @@ class MakeIterable:
                 except StopIteration:
                     raise StopIteration()
                 image = row["pixel_values"]
-                label = row.get("label")
+
                 id = row.get("__id__")
-                self.append_image(image, id)
+
+                other_ids = []
+                label = row.get("label")
+                if label is not None:
+                    other_ids.append(label)
+
+                self.append_image(image, id=id, label=label)
                 continue
 
             yield self.pop_batch()
@@ -190,34 +196,41 @@ class PatchNPacker(MakeIterable):
         self,
         image,
         id=None,
+        *metadata_ids,
+        **named_metadata_ids,
     ):
+        """
+        Append an image to be packed, along with any metadata ids
+
+        Each additional metadata_id/named_metadata_id if specified has to be an integer
+        """
         assert (
             id != MASK_IMAGE_ID
         ), f"{id} cannot be the same as the mask image id {MASK_IMAGE_ID}"
-        patches, positions, image_ids = self.patch(image, id)
-        self.__id += 1
 
-        sequence = TensorSet(
-            [
-                patches,
-                positions,
-                image_ids,
-            ]
-        )
+        patches, positions = self.patch(image)
 
-        self.append_sequence(sequence)
-
-    def patch(self, image, id=None):
         if id == None:
             id = self.__id
-        assert (
-            id != MASK_IMAGE_ID
-        ), f"{id} cannot be the same as the mask image id {MASK_IMAGE_ID}"
-        patches, positions = patch(image, self.patch_size)
-        s = len(patches)
-        image_ids = torch.full((s,), id, dtype=torch.long, device=patches.device)
+        self.__id += 1
 
-        return patches, positions, image_ids
+        s = len(patches)
+
+        full = lambda x: torch.full((s,), x, dtype=torch.long, device=patches.device)
+        image_ids = full(id)
+
+        metadata_ids = [full(x) for x in metadata_ids]
+        named_metadata_ids = {k: full(x) for k, x in named_metadata_ids.items()}
+
+        sequence = TensorSet(
+            [patches, positions, image_ids, *metadata_ids], named_metadata_ids
+        )
+
+        self._append_sequence(sequence)
+
+    def patch(self, image):
+        patches, positions = patch(image, self.patch_size)
+        return patches, positions
 
     def reset(self):
         self.packed_sequences = []
@@ -234,7 +247,7 @@ class PatchNPacker(MakeIterable):
         self.packed_sequences.append(packed_sequences)
         self._did_flush = True
 
-    def append_sequence(self, sequence):
+    def _append_sequence(self, sequence):
         self._did_flush = False
         s = sum(ts.sequence_length for ts in self.unpacked_sequences)
 
@@ -304,6 +317,7 @@ class ContextTargetPatchNPacker(MakeIterable):
         self.patch_size = patch_size
         self.batch_size = batch_size
         self.rng = rng
+        self.__id = 0
 
     def append_image(self, image, id=None):
         _, h, w = image.shape
@@ -313,7 +327,16 @@ class ContextTargetPatchNPacker(MakeIterable):
 
         # contains: patches, positions, image ids
         # These are patches for the entire image
-        sequence = TensorSet(self.patchnpacker_target.patch(image, id=id))
+        sequence = TensorSet(self.patchnpacker_target.patch(image))
+        if id is None:
+            id = self.__id
+            self.__id += 1
+
+        ids = torch.full(
+            (sequence.sequence_length,), id, device=device, dtype=torch.long
+        )
+        sequence.columns.append(ids)
+
         assert sequence.sequence_length == nph * npw
 
         # Randomly downsamples the sequence length if it is too long
@@ -367,8 +390,8 @@ class ContextTargetPatchNPacker(MakeIterable):
 
         sequence.columns.extend(target_blocks)
 
-        self.patchnpacker_context.append_sequence(context_sequence)
-        self.patchnpacker_target.append_sequence(sequence)
+        self.patchnpacker_context._append_sequence(context_sequence)
+        self.patchnpacker_target._append_sequence(sequence)
 
         # if one of the packers flush, they all have to flush
         # this keeps them in sync

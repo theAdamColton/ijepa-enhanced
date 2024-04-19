@@ -7,9 +7,10 @@ def validate_tensor_sets_broadcastable(tensorsets):
     if len(tensorsets) == 0:
         return
 
-    names = set(tensorsets[0].named_columns.keys())
+    names = tensorsets[0].named_columns.keys()
+
     for ts in tensorsets:
-        if set(ts.named_columns.keys()) != names:
+        if ts.named_columns.keys() != names:
             raise ValueError("Different named columns between tensorsets")
 
     num_columns = len(tensorsets[0].columns)
@@ -85,10 +86,9 @@ class TensorSet:
 
     @property
     def sequence_length(self):
-        if not self.columns:
+        if len(self.all_columns) == 0:
             return 0
-
-        return self.columns[0].shape[self.sequence_dim]
+        return self.all_columns[0].shape[self.sequence_dim]
 
     @property
     def num_columns(self):
@@ -147,18 +147,31 @@ class TensorSet:
         return TensorSet._run_func(tensorsets, torch.stack, 0, sequence_dim + 1)
 
     def pad(self, amount: int, value=-1):
+        """
+        Pad all columns of this tensorset along the sequence dimension
+        """
         assert amount >= 0
         padding = []
+        full = lambda shape: torch.full(
+            shape,
+            value,
+            dtype=c.dtype,
+            device=c.device,
+        )
         for c in self.columns:
-            _, *rest_shape = c.shape
-            pad_col = torch.full(
-                (amount, *rest_shape),
-                value,
-                dtype=c.dtype,
-                device=c.device,
-            )
+            pad_shape = list(c.shape)
+            pad_shape[self.sequence_dim] = amount
+
+            pad_col = full(pad_shape)
             padding.append(pad_col)
-        padding = TensorSet(padding)
+
+        named_padding = {}
+        for k, c in self.named_columns.items():
+            pad_shape = list(c.shape)
+            pad_shape[self.sequence_dim] = amount
+            pad_col = full(pad_shape)
+            named_padding[k] = pad_col
+        padding = TensorSet(padding, named_padding, self.sequence_dim)
         return TensorSet.cat([self, padding])
 
     def to_device(self, device):
@@ -166,4 +179,5 @@ class TensorSet:
         in-place
         """
         self.columns = [c.to(device) for c in self.columns]
+        self.named_columns = {k: c.to(device) for k, c in self.named_columns.items()}
         return self
