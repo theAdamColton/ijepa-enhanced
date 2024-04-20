@@ -12,6 +12,7 @@ sequence_length_target: 512
 sequence_length_prediction: 512
 eval_every_num_steps: 50
 dataset:
-  path: /hdd/imagenet1k/imagenet1k-train-{0000..1023}.tar
-  type: wds-image
-  image_column_name: jpg
+  path: food101
+  type: hf-image
+  image_column_name: image
+  split: train

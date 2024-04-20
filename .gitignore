@@ -1,5 +1,6 @@
 __pycache__/
 wandb/
+viz-output/
 test-files/
 outputs/
 # py-spy profile

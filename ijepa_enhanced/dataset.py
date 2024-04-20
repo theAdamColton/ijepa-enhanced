@@ -37,7 +37,7 @@ class CropToMultipleOf(nn.Module):
 
 
 def resize_to_max(pixel_values, max_res):
-    _, h, w = pixel_values.shape
+    *_, h, w = pixel_values.shape
     if max(h, w) > max_res:
         aspect_ratio = h / w
         if h > w:
@@ -111,7 +111,7 @@ def get_wds_image_dataset(
 
 def get_dataset(
     type="hf-image",  # or 'wds-image'
-    split=None,
+    split="train",
     path="mnist",  # hf dataset path or wds dataset path
     download_url="",  # for debug
     num_classes=None,

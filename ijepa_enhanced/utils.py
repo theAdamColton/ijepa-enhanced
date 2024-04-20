@@ -2,12 +2,25 @@ import numpy as np
 import torch
 import torchvision
 import math
+import torchvision
 from torchvision.io import ImageReadMode
 import matplotlib.pyplot as plt
 
 
 def imread(path):
     return torchvision.io.read_image(path, ImageReadMode.RGB) / 255
+
+
+def imsave(image, path, norm=False):
+    image = image.detach().cpu()
+    if image.is_floating_point():
+        if norm:
+            image = (image - image.min()) / (image.max() - image.min())
+        image = image.clamp(0, 1) * 255
+        image = image.to(torch.uint8)
+
+    torchvision.io.write_jpeg(image, filename=path, quality=90)
+    print("wrote ", path)
 
 
 def imshow(image: torch.Tensor, ax=None):

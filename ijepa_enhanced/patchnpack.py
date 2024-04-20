@@ -46,6 +46,16 @@ def patch(x: torch.Tensor, patch_size: int):
 
 
 def unpack(patches, positions, ids, patch_size: int, image_channels: int):
+    """
+    patches: (B S Z)
+    positions: (B S 2)
+    ids: (B S)
+
+    Takes a sequence of patches, positions, and image ids
+    Images in the sequence are uniquely identified by an id
+
+    Uses the positions to place the patches back in a reconstructed image
+    """
     patches = einx.rearrange(
         "... S (C PH PW) -> ... S C PH PW",
         patches,
@@ -58,11 +68,21 @@ def unpack(patches, positions, ids, patch_size: int, image_channels: int):
         if id == MASK_IMAGE_ID:
             continue
         mask = ids == id
-        h = positions[mask][..., 0].max() * patch_size + patch_size
-        w = positions[mask][..., 1].max() * patch_size + patch_size
-        image = torch.zeros(image_channels, h, w, device=patches.device)
+        image_positions = positions[mask]
+        image_heights, image_widths = image_positions.unbind(-1)
+        min_h = image_heights.min() * patch_size
+        min_w = image_widths.min() * patch_size
+        max_h = image_heights.max() * patch_size + patch_size
+        max_w = image_widths.max() * patch_size + patch_size
+        h = max_h - min_h
+        w = max_w - min_w
+        image = torch.zeros(
+            image_channels, h, w, device=patches.device, dtype=patches.dtype
+        )
         for pos, patch in zip(positions[mask], patches[mask]):
             i, j = (pos * patch_size).unbind(-1)
+            i = i - min_h
+            j = j - min_w
             image[
                 :,
                 i : i + patch_size,
@@ -319,23 +339,42 @@ class ContextTargetPatchNPacker(MakeIterable):
         self.rng = rng
         self.__id = 0
 
-    def append_image(self, image, id=None):
+    def append_image(
+        self,
+        image,
+        id=None,
+        *metadata_ids,
+        **named_metadata_ids,
+    ):
         _, h, w = image.shape
         device = image.device
         nph = h // self.patch_size
         npw = w // self.patch_size
 
-        # contains: patches, positions, image ids
-        # These are patches for the entire image
-        sequence = TensorSet(self.patchnpacker_target.patch(image))
         if id is None:
             id = self.__id
             self.__id += 1
 
-        ids = torch.full(
-            (sequence.sequence_length,), id, device=device, dtype=torch.long
+        patches, positions = self.patchnpacker_target.patch(image)
+
+        sequence_length = len(patches)
+
+        full = lambda x: torch.full(
+            (sequence_length,), x, dtype=torch.long, device=image.device
         )
-        sequence.columns.append(ids)
+        image_ids = full(id)
+
+        metadata_ids = [full(x) for x in metadata_ids]
+        named_metadata_ids = {k: full(x) for k, x in named_metadata_ids.items()}
+
+        # contains: patches, positions, image ids
+        # These are patches for the entire image
+        sequence = TensorSet(
+            [patches, positions] + metadata_ids,
+            named_columns=named_metadata_ids,
+        )
+
+        sequence.columns.append(image_ids)
 
         assert sequence.sequence_length == nph * npw
 
@@ -449,14 +488,6 @@ class ContextTargetPatchNPacker(MakeIterable):
             ), f"prediction sequence length {tgt_seq.sequence_length} too long by {-pad_amt}"
             if pad_amt > 0:
                 tgt_seq = tgt_seq.pad(pad_amt, MASK_IMAGE_ID)
-
-            pred_mask_seq = torch.cat(
-                (
-                    pred_mask_seq,
-                    torch.zeros(pad_amt, device=device, dtype=torch.bool),
-                )
-            )
-            tgt_seq.columns.append(pred_mask_seq)
 
             tgt_seq_packed.append(tgt_seq)
 

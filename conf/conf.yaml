@@ -4,6 +4,7 @@ defaults:
   - train: default
   - eval: food101
 
+seed: 42
 torch_compile: True
 
 train:
