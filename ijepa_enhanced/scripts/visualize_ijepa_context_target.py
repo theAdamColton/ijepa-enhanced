@@ -40,25 +40,24 @@ def main(config: DictConfig):
         is_tgt_mask = torch.zeros(batch_size, ctx.sequence_length, dtype=torch.bool)
         ctx = TensorSequence(
             named_columns=dict(
-                patches=ctx.named_columns["patches"],
-                positions=ctx.named_columns["positions"],
-                image_ids=ctx.named_columns["image_ids"],
+                patches=ctx["patches"],
+                positions=ctx["positions"],
+                image_ids=ctx["image_ids"],
                 is_tgt_mask=is_tgt_mask,
             ),
             sequence_dim=ctx.sequence_dim,
         )
 
         tgt_block_masks = [
-            tgt.named_columns[f"target_block{i}"]
-            for i in range(patchnpacker.num_prediction_targets)
+            tgt[f"target_block{i}"] for i in range(patchnpacker.num_prediction_targets)
         ]
 
         is_tgt_mask = torch.ones(batch_size, tgt.sequence_length, dtype=torch.bool)
         tgt = TensorSequence(
             named_columns=dict(
-                patches=tgt.named_columns["patches"],
-                positions=tgt.named_columns["positions"],
-                image_ids=tgt.named_columns["image_ids"],
+                patches=tgt["patches"],
+                positions=tgt["positions"],
+                image_ids=tgt["image_ids"],
                 is_tgt_mask=is_tgt_mask,
             ),
             sequence_dim=tgt.sequence_dim,
@@ -70,11 +69,12 @@ def main(config: DictConfig):
             )
 
             # visualizes target patches
-            for pred_seq in pred:
-                patches = pred_seq.named_columns["patches"]
-                positions = pred_seq.named_columns["positions"]
-                ids = pred_seq.named_columns["image_ids"]
-                is_tgt_mask = pred_seq.named_columns["is_tgt_mask"]
+            for batch_index in range(pred.leading_shape[0]):
+                pred_seq = pred.iloc[batch_index]
+                patches = pred_seq["patches"]
+                positions = pred_seq["positions"]
+                ids = pred_seq["image_ids"]
+                is_tgt_mask = pred_seq["is_tgt_mask"]
                 is_pad = ids == MASK_IMAGE_ID
                 is_not_tgt_mask = ~is_tgt_mask & ~is_pad
                 is_tgt_mask = is_tgt_mask & ~is_pad

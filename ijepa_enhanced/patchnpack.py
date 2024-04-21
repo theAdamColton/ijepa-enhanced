@@ -145,7 +145,7 @@ def make_tensorset_sequence(
     needs_drop = sequence.sequence_length > sequence_length
     if needs_drop:
         mask = get_sample_mask(sequence.sequence_length, sequence_length, rng)
-        sequence = sequence[mask]
+        sequence = sequence.iloc[mask]
 
     # if the sequence length is too short, pads
     pad_amt = sequence_length - sequence.sequence_length
@@ -171,7 +171,7 @@ def get_attention_mask(batched_image_ids: torch.LongTensor) -> torch.BoolTensor:
     return attention_mask
 
 
-class MakeIterable:
+class MakeIterableMixin:
     def make_iter(self, data_iter):
         """
         pass in a data iter which yields rows of data,
@@ -200,7 +200,7 @@ class MakeIterable:
             yield self.pop_batch()
 
 
-class PatchNPacker(MakeIterable):
+class PatchNPacker(MakeIterableMixin):
     def __init__(self, patch_size, sequence_length, batch_size, rng=None):
         self.patch_size = patch_size
         self.sequence_length = sequence_length
@@ -215,13 +215,12 @@ class PatchNPacker(MakeIterable):
         self,
         image,
         id=None,
-        *metadata_ids,
         **named_metadata_ids,
     ):
         """
         Append an image to be packed, along with any metadata ids
 
-        Each additional metadata_id/named_metadata_id if specified has to be an integer
+        Each additional named_metadata_id if specified has to be an integer
         """
         assert (
             id != MASK_IMAGE_ID
@@ -238,12 +237,16 @@ class PatchNPacker(MakeIterable):
         full = lambda x: torch.full((s,), x, dtype=torch.long, device=patches.device)
         image_ids = full(id)
 
-        metadata_ids = [full(x) for x in metadata_ids]
         named_metadata_ids = {k: full(x) for k, x in named_metadata_ids.items()}
 
-        sequence = TensorSequence(
-            [patches, positions, image_ids, *metadata_ids], named_metadata_ids
+        named_columns = dict(
+            patches=patches,
+            positions=positions,
+            image_ids=image_ids,
+            **named_metadata_ids,
         )
+
+        sequence = TensorSequence(named_columns=named_columns)
 
         self._append_sequence(sequence)
 
@@ -295,7 +298,7 @@ class PatchNPacker(MakeIterable):
         return batch
 
 
-class ContextTargetPatchNPacker(MakeIterable):
+class ContextTargetPatchNPacker(MakeIterableMixin):
     """
     Allows PackNPatch to be used with context and target patches.
     You can feed a ContextTargetPatchNPacker images and get back
@@ -385,7 +388,7 @@ class ContextTargetPatchNPacker(MakeIterable):
                 sequence.sequence_length, self.sequence_length_target, self.rng
             )
             downsample_mask = downsample_mask.to(device)
-            sequence = sequence[downsample_mask]
+            sequence = sequence.iloc[downsample_mask]
         else:
             downsample_mask = None
 
@@ -403,7 +406,7 @@ class ContextTargetPatchNPacker(MakeIterable):
             ).flatten()
 
             if downsample_mask is not None:
-                target_block = target_block[downsample_mask]
+                target_block = target_block.iloc[downsample_mask]
 
             target_blocks.append(target_block)
 
@@ -413,7 +416,7 @@ class ContextTargetPatchNPacker(MakeIterable):
         ).flatten()
 
         if downsample_mask is not None:
-            context_block = context_block[downsample_mask]
+            context_block = context_block.iloc[downsample_mask]
 
         # the context block might need to be downsampled to fit inside the max context sequence length
 
@@ -426,7 +429,7 @@ class ContextTargetPatchNPacker(MakeIterable):
         context_block = context_block & ~target_any
 
         # Only contains the patches in the context block
-        context_sequence = sequence[context_block]
+        context_sequence = sequence.iloc[context_block]
 
         for i, target_block in enumerate(target_blocks):
             sequence.named_columns[f"target_block{i}"] = target_block
@@ -473,19 +476,27 @@ class ContextTargetPatchNPacker(MakeIterable):
         TODO could potentially waste less padding by unpacking the ctx_sequence and then repacking it together with the pred_sequence
         """
         device = tgt.all_columns[0].device
+        b = tgt_block_mask.shape[0]
+        tgt_block_mask = tgt_block_mask & (tgt["image_ids"] != MASK_IMAGE_ID)
 
         packed = []
-        for tgt_seq_mask, tgt_seq, ctx_seq in zip(tgt_block_mask, tgt, ctx):
+        for i in range(b):
+            tgt_seq_mask = tgt_block_mask[i]
+            tgt_seq = tgt.iloc[i]
+            ctx_seq = ctx.iloc[i]
+
             # use only the target tokens that are included in the mask
-            tgt_seq = tgt_seq[tgt_seq_mask]
+            # and are not padding
+            tgt_seq = tgt_seq.iloc[tgt_seq_mask]
 
             # pack only the ctx tokens that are not padding
-            ctx_seq = ctx_seq[ctx_seq.named_columns["image_ids"] != MASK_IMAGE_ID]
+            ctx_seq = ctx_seq.iloc[ctx_seq["image_ids"] != MASK_IMAGE_ID]
 
             # pads up to the prediction sequence length
             pad_amt = self.sequence_length_prediction - (
                 tgt_seq.sequence_length + ctx_seq.sequence_length
             )
+
             assert (
                 pad_amt >= 0
             ), f"prediction sequence length {tgt_seq.sequence_length + ctx_seq.sequence_length} too long by {-pad_amt}"
