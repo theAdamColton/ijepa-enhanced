@@ -8,9 +8,8 @@ from dataclasses import dataclass
 from torch import nn
 import torch
 import einx
-from torch._prims_common import TensorSequenceType
 
-from .tensorset import TensorSet
+from tensorsequence import TensorSequence
 
 
 def patch(x: torch.Tensor, patch_size: int):
@@ -138,9 +137,9 @@ MASK_IMAGE_ID = -100
 
 
 def make_tensorset_sequence(
-    sequence: List[TensorSet], sequence_length, rng=None
-) -> TensorSet:
-    sequence = TensorSet.cat(sequence)
+    sequence: List[TensorSequence], sequence_length, rng=None
+) -> TensorSequence:
+    sequence = TensorSequence.cat(sequence)
 
     # if the sequence length overflows, randomly drops items in the sequence
     needs_drop = sequence.sequence_length > sequence_length
@@ -206,8 +205,8 @@ class PatchNPacker(MakeIterable):
         self.patch_size = patch_size
         self.sequence_length = sequence_length
         self.batch_size = batch_size
-        self.unpacked_sequences: List[TensorSet] = []
-        self.packed_sequences: List[TensorSet] = []
+        self.unpacked_sequences: List[TensorSequence] = []
+        self.packed_sequences: List[TensorSequence] = []
         self.__id = 1
         self.rng = rng
         self._did_flush = False
@@ -242,7 +241,7 @@ class PatchNPacker(MakeIterable):
         metadata_ids = [full(x) for x in metadata_ids]
         named_metadata_ids = {k: full(x) for k, x in named_metadata_ids.items()}
 
-        sequence = TensorSet(
+        sequence = TensorSequence(
             [patches, positions, image_ids, *metadata_ids], named_metadata_ids
         )
 
@@ -282,7 +281,7 @@ class PatchNPacker(MakeIterable):
 
     def pop_batch(self):
         """
-        returns a TensorSet, which contains the columns (in this order)
+        returns a TensorSequence, which contains the columns (in this order)
             patches, positions, image_ids
         """
         if not self.can_pop_batch():
@@ -291,7 +290,7 @@ class PatchNPacker(MakeIterable):
             self.packed_sequences[: self.batch_size],
             self.packed_sequences[self.batch_size :],
         )
-        batch = TensorSet.stack(batch)
+        batch = TensorSequence.stack(batch)
 
         return batch
 
@@ -343,7 +342,6 @@ class ContextTargetPatchNPacker(MakeIterable):
         self,
         image,
         id=None,
-        *metadata_ids,
         **named_metadata_ids,
     ):
         _, h, w = image.shape
@@ -364,17 +362,20 @@ class ContextTargetPatchNPacker(MakeIterable):
         )
         image_ids = full(id)
 
-        metadata_ids = [full(x) for x in metadata_ids]
         named_metadata_ids = {k: full(x) for k, x in named_metadata_ids.items()}
+
+        named_columns = {
+            "patches": patches,
+            "positions": positions,
+            "image_ids": image_ids,
+            **named_metadata_ids,
+        }
 
         # contains: patches, positions, image ids
         # These are patches for the entire image
-        sequence = TensorSet(
-            [patches, positions] + metadata_ids,
-            named_columns=named_metadata_ids,
+        sequence = TensorSequence(
+            named_columns=named_columns,
         )
-
-        sequence.columns.append(image_ids)
 
         assert sequence.sequence_length == nph * npw
 
@@ -427,7 +428,8 @@ class ContextTargetPatchNPacker(MakeIterable):
         # Only contains the patches in the context block
         context_sequence = sequence[context_block]
 
-        sequence.columns.extend(target_blocks)
+        for i, target_block in enumerate(target_blocks):
+            sequence.named_columns[f"target_block{i}"] = target_block
 
         self.patchnpacker_context._append_sequence(context_sequence)
         self.patchnpacker_target._append_sequence(sequence)
@@ -446,7 +448,7 @@ class ContextTargetPatchNPacker(MakeIterable):
     def pop_batch(self):
         """
         returns a context batch and a target batch as a tuple
-        each batch is a TensorSet
+        each batch is a TensorSequence
         """
         if not self.can_pop_batch():
             return None
@@ -454,32 +456,31 @@ class ContextTargetPatchNPacker(MakeIterable):
         return tuple(p.pop_batch() for p in self.all_packers)
 
     def make_prediction_target_sequence(
-        self, tgt: TensorSet, ctx: TensorSet, tgt_block_mask
+        self, tgt: TensorSequence, ctx: TensorSequence, tgt_block_mask
     ):
         """
         tgt_block_mask is a boolean mask of shape (B S) which is set to True for sequence
          elements that are prediction targets.
 
-        tgt is a TensorSet containing patches and other sequence data of the data to be predicted
+        tgt is a TensorSequence containing patches and other sequence data of the data to be predicted
 
-        ctx is a TensorSet containing patches and other sequence data of the data to be used as the known independant variable
+        ctx is a TensorSequence containing patches and other sequence data of the data to be used as the known independant variable
 
-        Returns a TensorSet, where each sequence has the elements to be predicted and the context elements concatenated along the sequence dimension.
+        Returns a TensorSequence, where each sequence has the elements to be predicted and the context elements concatenated along the sequence dimension.
 
-        The sequence length of the returned TensorSet is self.sequence_length_prediction + self.sequence_length_context
+        The sequence length of the returned TensorSequence is self.sequence_length_prediction + self.sequence_length_context
 
         TODO could potentially waste less padding by unpacking the ctx_sequence and then repacking it together with the pred_sequence
         """
-        device = tgt.columns[0].device
+        device = tgt.all_columns[0].device
 
         tgt_seq_packed = []
-        for tgt_seq_mask, tgt_seq in zip(tgt_block_mask, tgt):
+        for tgt_seq_mask, tgt_seq, ctx_seq in zip(tgt_block_mask, tgt, ctx):
+            # use only the target tokens that are included in the mask
             tgt_seq = tgt_seq[tgt_seq_mask]
 
-            # creates mask
-            pred_mask_seq = torch.ones(
-                tgt_seq.sequence_length, device=device, dtype=torch.bool
-            )
+            # use only the ctx tokens that are not padding
+            ctx_seq = ctx_seq[ctx_seq.named_columns["image_ids"] != MASK_IMAGE_ID]
 
             # pads up to the prediction sequence length
             pad_amt = self.sequence_length_prediction - tgt_seq.sequence_length
@@ -491,7 +492,7 @@ class ContextTargetPatchNPacker(MakeIterable):
 
             tgt_seq_packed.append(tgt_seq)
 
-        tgt_seq_packed = TensorSet.stack(tgt_seq_packed)
-        tgt_seq_packed = TensorSet.cat([tgt_seq_packed, ctx])
+        tgt_seq_packed = TensorSequence.stack(tgt_seq_packed)
+        tgt_seq_packed = TensorSequence.cat([tgt_seq_packed, ctx])
 
         return tgt_seq_packed

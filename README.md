@@ -26,3 +26,8 @@ The discrete embedding space is used in order to reduce the space requirements o
 ### Null attention
 
 ViTs can benifit from allowing the attention process to attend to nothing. This surmounts to adding a 1 to the denominator of the softmax normalization of the self attention matrices.
+
+### Bugs
+
+* Patchnpack context-target sometimes gives context and target different ids
+* Patchnpack context-target the target blocks can be sampled exterior to the context rect which is not good

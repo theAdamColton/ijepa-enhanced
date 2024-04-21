@@ -5,7 +5,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from ..patchnpack import MASK_IMAGE_ID, ContextTargetPatchNPacker, unpack
 from ..dataset import get_dataset
-from ..tensorset import TensorSet
+from tensorsequence import TensorSequence
 from ..utils import imshow, imsave
 
 
@@ -38,16 +38,29 @@ def main(config: DictConfig):
     for batch_i, (ctx, tgt) in enumerate(patchnpacker.make_iter(dataloader)):
         batch_size = ctx.all_columns[0].shape[0]
         is_tgt_mask = torch.zeros(batch_size, ctx.sequence_length, dtype=torch.bool)
-        ctx_patches, ctx_positions, ctx_image_ids = ctx.columns
-        ctx = TensorSet(
-            [ctx_patches, ctx_positions, ctx_image_ids, is_tgt_mask],
+        ctx = TensorSequence(
+            named_columns=dict(
+                patches=ctx.named_columns["patches"],
+                positions=ctx.named_columns["positions"],
+                image_ids=ctx.named_columns["image_ids"],
+                is_tgt_mask=is_tgt_mask,
+            ),
             sequence_dim=ctx.sequence_dim,
         )
 
         is_tgt_mask = torch.ones(batch_size, tgt.sequence_length, dtype=torch.bool)
-        tgt_patches, tgt_positions, tgt_image_ids, *tgt_block_masks = tgt.columns
-        tgt = TensorSet(
-            [tgt_patches, tgt_positions, tgt_image_ids, is_tgt_mask],
+        tgt_block_masks = [
+            tgt.named_columns[f"target_block{i}"]
+            for i in range(patchnpacker.num_prediction_targets)
+        ]
+
+        tgt = TensorSequence(
+            named_columns=dict(
+                patches=tgt.named_columns["patches"],
+                positions=tgt.named_columns["positions"],
+                image_ids=tgt.named_columns["image_ids"],
+                is_tgt_mask=is_tgt_mask,
+            ),
             sequence_dim=tgt.sequence_dim,
         )
 
@@ -58,21 +71,23 @@ def main(config: DictConfig):
 
             # visualizes target patches
             for i, pred_seq in enumerate(pred):
-                patches, positions, ids, is_tgt = pred_seq.columns
+                patches = pred_seq.named_columns["patches"]
+                positions = pred_seq.named_columns["positions"]
+                ids = pred_seq.named_columns["image_ids"]
+                is_tgt_mask = pred_seq.named_columns["is_tgt_mask"]
                 is_pad = ids == MASK_IMAGE_ID
-                is_tgt = is_tgt & ~is_pad
-                not_tgt = ~is_tgt & ~is_pad
+                is_tgt_mask = is_tgt_mask & ~is_pad
 
-                # slightly lightens the tgt
+                # converts to f32 and slightly lightens the tgt rectangle
                 patches = patches / 255.0
-                patches[is_tgt] = patches[is_tgt] + 0.1
+                patches[is_tgt_mask] = patches[is_tgt_mask] + 0.1
 
                 images = unpack(patches, positions, ids, patchnpacker.patch_size, 3)
 
-                for image in images:
+                for image_i, image in enumerate(images):
                     imsave(
                         image,
-                        f"viz-output/batch{batch_i:04}-sequence{i:04}-mask{j:04}.jpg",
+                        f"viz-output/batch{batch_i:04}-sequence{i:04}-image{image_i:04}-mask{j:04}.jpg",
                         norm=True,
                     )
 

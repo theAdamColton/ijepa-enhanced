@@ -8,7 +8,7 @@ import accelerate
 from torch.utils.data import DataLoader
 import wandb
 
-from ijepa_enhanced.tensorset import TensorSet
+from tensorsequence import TensorSequence
 
 from ..vit import ViT
 from ..ema import EMA
@@ -30,8 +30,8 @@ def compute_training_loss(
     teacher: EMA,
     predictor: Predictor,
     accelerator,
-    ctx: TensorSet,
-    tgt: TensorSet,
+    ctx: TensorSequence,
+    tgt: TensorSequence,
     patchnpacker: ContextTargetPatchNPacker,
 ):
     device = accelerator.device
@@ -48,26 +48,41 @@ def compute_training_loss(
     ctx_patches, ctx_positions, ctx_image_ids = ctx.columns
     ctx_attn_mask = get_attention_mask(ctx_image_ids)
 
+    # u8 -> float
     ctx_patches = ctx_patches / 255
+    with accelerator.autocast():
+        ctx_states = vit(ctx_patches, ctx_attn_mask, ctx_positions)
+
+    tgt_batch_size, tgt_sequence_length = tgt.all_columns[0].shape[:2]
+    tgt_pred_mask = torch.ones(
+        tgt_batch_size, tgt_sequence_length, device=device, dtype=torch.bool
+    )
+    tgt = TensorSequence(
+        named_columns={
+            "states": tgt_states,
+            "positions": tgt_positions,
+            "image_ids": tgt_image_ids,
+            "pred_mask": tgt_pred_mask,
+        },
+        sequence_dim=tgt.sequence_dim,
+    )
 
     ctx_batch_size = ctx_patches.shape[0]
     ctx_sequence_length = ctx_patches.shape[1]
 
-    with accelerator.autocast():
-        ctx_states = vit(ctx_patches, ctx_attn_mask, ctx_positions)
-
-    # replaces the tgt patches with the tgt_states
-    tgt = TensorSet(
-        [tgt_states, tgt_positions, tgt_image_ids], sequence_dim=tgt.sequence_dim
-    )
-
     # building block for masking out preds
+    # pred_mask is 1 where the patch is a prediction instead of a context
     ctx_pred_mask = torch.zeros(
         ctx_batch_size, ctx_sequence_length, device=device, dtype=torch.bool
     )
 
-    ctx = TensorSet(
-        [ctx_states, ctx_positions, ctx_image_ids, ctx_pred_mask],
+    ctx = TensorSequence(
+        named_columns={
+            "states": ctx_states,
+            "positions": ctx_positions,
+            "image_ids": ctx_image_ids,
+            "pred_mask": ctx_pred_mask,
+        },
         sequence_dim=ctx.sequence_dim,
     )
 
@@ -81,19 +96,26 @@ def compute_training_loss(
             tgt, ctx, tgt_block_mask
         )
 
-        pred_states, pred_positions, pred_image_ids, pred_tgt_mask = tgt_preds.columns
+        pred_states = tgt_preds.named_columns["states"]
+        pred_positions = tgt_preds.named_columns["positions"]
+        pred_image_ids = tgt_preds.named_columns["image_ids"]
+        pred_tgt_mask = tgt_preds.named_columns["pred_mask"]
         # redo attention mask
         pred_attn_mask = get_attention_mask(pred_image_ids)
 
         with accelerator.autocast():
             y = predictor(pred_states, pred_attn_mask, pred_tgt_mask, pred_positions)
 
-        # l1
+        # l1 loss
+
+        # precision issues with masked mean here
         # loss = masked_mean(y - pred_states, pred_tgt_mask).mean()
+
         loss = F.l1_loss(y[pred_tgt_mask], pred_states[pred_tgt_mask])
+
         all_loss.append(loss)
 
-    loss = torch.cat(tuple(loss.unsqueeze(0) for loss in all_loss)).mean()
+    loss = torch.stack(all_loss).mean()
     return loss
 
 
