@@ -1,3 +1,3 @@
 defaults:
-  - vit: base_patch32
+  - vit: base_patch16
   - predictor: base

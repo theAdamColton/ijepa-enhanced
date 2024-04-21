@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 import torchvision
 import math
@@ -32,19 +31,19 @@ def imshow(image: torch.Tensor, ax=None):
         ax.show(image)
 
 
-def rand_uniform(a, b):
-    u = torch.rand((1,)).item()
-    return u * (b - a) + a
+def random_uniform(a=0.0, b=1.0, rng=None):
+    u = torch.rand((1,), generator=rng).item()
+    return (b - a) * u + a
 
 
-def rand_log_uniform(a, b):
+def random_log_uniform(a, b):
     if b < a:
         tmp = b
         b = a
         a = tmp
     if a == 0.0:
         a = 1e-15
-    return math.e ** rand_uniform(math.log(a), math.log(b))
+    return math.e ** random_uniform(math.log(a), math.log(b))
 
 
 def print_num_parameters(model: torch.nn.Module):

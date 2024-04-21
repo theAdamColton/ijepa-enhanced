@@ -9,7 +9,7 @@ from torch.nn import functional as F
 import os
 
 from ..lfq import LFQ, masked_mean, entropy_loss, calculate_perplexity
-from ..utils import imread, rand_log_uniform
+from ..utils import imread, random_log_uniform
 
 
 class TestLFQ(unittest.TestCase):
@@ -83,12 +83,12 @@ class TestLFQ(unittest.TestCase):
         loss_diffs = []
         for _ in range(10):
             d = dict(
-                learning_rate=rand_log_uniform(1e-1, 1e-5),
-                entropy_weight=rand_log_uniform(1e0, 1e-5),
-                commit_weight=rand_log_uniform(1e0, 1e-5),
-                entropy_sample_minimization_weight=rand_log_uniform(100, 1e-4),
-                entropy_batch_maximization_weight=rand_log_uniform(100, 1e-4),
-                temperature=rand_log_uniform(100, 0.1),
+                learning_rate=random_log_uniform(1e-1, 1e-5),
+                entropy_weight=random_log_uniform(1e0, 1e-5),
+                commit_weight=random_log_uniform(1e0, 1e-5),
+                entropy_sample_minimization_weight=random_log_uniform(100, 1e-4),
+                entropy_batch_maximization_weight=random_log_uniform(100, 1e-4),
+                temperature=random_log_uniform(100, 0.1),
             )
 
             result_dict = do_train(device=device, iterations=50, **d)

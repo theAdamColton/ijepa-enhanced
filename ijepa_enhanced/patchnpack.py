@@ -2,14 +2,13 @@
 This file implements a pure python/pytorch greedy patch n pack algorithm
 """
 
-import random
-from typing import List, Optional, Sequence, Sized
-from dataclasses import dataclass
-from torch import nn
+from typing import List
 import torch
 import einx
 
 from tensorsequence import TensorSequence
+
+from .utils import random_uniform
 
 
 def patch(x: torch.Tensor, patch_size: int):
@@ -102,11 +101,6 @@ def get_sample_mask(s: int, max_length: int, rng=None):
     return mask
 
 
-def random_uniform(a=0.0, b=1.0, rng=None):
-    u = torch.rand((1,), generator=rng).item()
-    return (b - a) * u + a
-
-
 def sample_rect_mask(
     h: int,
     w: int,
@@ -134,11 +128,26 @@ def sample_rect_mask(
 
 
 MASK_IMAGE_ID = -100
+TENSORSET_PADDING_VALUE_DICT = {
+    "image_ids": MASK_IMAGE_ID,
+    "positions": 0,
+    "patches": 0,
+    "states": 0,
+    "prediction_block_masks": 0,
+    "is_prediction_mask": 0,
+    "label": MASK_IMAGE_ID,
+}
 
 
-def make_tensorset_sequence(
-    sequence: List[TensorSequence], sequence_length, rng=None
+def clamp_tensorsequence_to_length(
+    sequence: List[TensorSequence],
+    sequence_length: int,
+    rng=None,
+    pad_value_dict=TENSORSET_PADDING_VALUE_DICT,
 ) -> TensorSequence:
+    """
+    coerces a list of sequences into the specified sequence_length by padding and randomly dropping sequence items
+    """
     sequence = TensorSequence.cat(sequence)
 
     # if the sequence length overflows, randomly drops items in the sequence
@@ -151,7 +160,7 @@ def make_tensorset_sequence(
     pad_amt = sequence_length - sequence.sequence_length
     needs_pad = pad_amt > 0
     if needs_pad:
-        sequence = sequence.pad(pad_amt, MASK_IMAGE_ID)
+        sequence = sequence.pad(pad_amt, value_dict=pad_value_dict)
 
     return sequence
 
@@ -171,113 +180,39 @@ def get_attention_mask(batched_image_ids: torch.LongTensor) -> torch.BoolTensor:
     return attention_mask
 
 
-class MakeIterableMixin:
-    def make_iter(self, data_iter):
-        """
-        pass in a data iter which yields rows of data,
-            must contain at least "pixel_values"
-
-        returns a generator that yields batches
-        """
-        while True:
-            if not self.can_pop_batch():
-                try:
-                    row = next(data_iter)
-                except StopIteration:
-                    return
-                image = row["pixel_values"]
-
-                id = row.get("__id__")
-
-                other_ids = []
-                label = row.get("label")
-                if label is not None:
-                    other_ids.append(label)
-
-                self.append_image(image, id=id, label=label)
-                continue
-
-            yield self.pop_batch()
-
-
-class PatchNPacker(MakeIterableMixin):
-    def __init__(self, patch_size, sequence_length, batch_size, rng=None):
-        self.patch_size = patch_size
+class Packer:
+    def __init__(self, sequence_length, batch_size, rng=None):
         self.sequence_length = sequence_length
         self.batch_size = batch_size
         self.unpacked_sequences: List[TensorSequence] = []
         self.packed_sequences: List[TensorSequence] = []
-        self.__id = 1
         self.rng = rng
-        self._did_flush = False
 
-    def append_image(
-        self,
-        image,
-        id=None,
-        **named_metadata_ids,
-    ):
-        """
-        Append an image to be packed, along with any metadata ids
+    def _flush(self):
+        assert len(self.unpacked_sequences) > 1
 
-        Each additional named_metadata_id if specified has to be an integer
-        """
-        assert (
-            id != MASK_IMAGE_ID
-        ), f"{id} cannot be the same as the mask image id {MASK_IMAGE_ID}"
+        packed, self.unpacked_sequences = self.unpacked_sequences[:-1], [
+            self.unpacked_sequences[-1]
+        ]
 
-        patches, positions = self.patch(image)
+        packed = clamp_tensorsequence_to_length(packed, self.sequence_length)
+        self.packed_sequences.append(packed)
 
-        if id == None:
-            id = self.__id
-        self.__id += 1
+    def _needs_flush(self):
+        if len(self.unpacked_sequences) < 2:
+            return False
+        s = sum(ts.sequence_length for ts in self.unpacked_sequences[:-1])
+        if s > self.sequence_length:
+            return True
+        return False
 
-        s = len(patches)
+    def _append(self, sequence: TensorSequence):
+        self.unpacked_sequences.append(sequence)
 
-        full = lambda x: torch.full((s,), x, dtype=torch.long, device=patches.device)
-        image_ids = full(id)
-
-        named_metadata_ids = {k: full(x) for k, x in named_metadata_ids.items()}
-
-        named_columns = dict(
-            patches=patches,
-            positions=positions,
-            image_ids=image_ids,
-            **named_metadata_ids,
-        )
-
-        sequence = TensorSequence(named_columns=named_columns)
-
-        self._append_sequence(sequence)
-
-    def patch(self, image):
-        patches, positions = patch(image, self.patch_size)
-        return patches, positions
-
-    def reset(self):
-        self.packed_sequences = []
-        self.unpacked_sequences = []
-        self._did_flush = False
-        self.__id = 1
-
-    def _flush_sequence(self):
-        if len(self.unpacked_sequences) == 0:
-            return
-        packed_sequences = make_tensorset_sequence(
-            self.unpacked_sequences, self.sequence_length
-        )
-        self.packed_sequences.append(packed_sequences)
-        self._did_flush = True
-
-    def _append_sequence(self, sequence):
-        self._did_flush = False
-        s = sum(ts.sequence_length for ts in self.unpacked_sequences)
-
-        if s + sequence.sequence_length > self.sequence_length and s > 0:
-            self._flush_sequence()
-            self.unpacked_sequences = [sequence]
-        else:
-            self.unpacked_sequences.append(sequence)
+    def append(self, sequence: TensorSequence):
+        self._append(sequence)
+        if self._needs_flush():
+            self._flush()
 
     def can_pop_batch(self):
         return len(self.packed_sequences) >= self.batch_size
@@ -296,6 +231,82 @@ class PatchNPacker(MakeIterableMixin):
         batch = TensorSequence.stack(batch)
 
         return batch
+
+
+class MakeIterableMixin:
+    def make_iter(self, data_iter):
+        """
+        pass in a data iter which yields rows of data,
+            must contain at least "pixel_values"
+
+        returns a generator that yields batches
+        """
+        while True:
+            if not self.can_pop_batch():
+                try:
+                    row = next(data_iter)
+                except StopIteration:
+                    return
+                image = row["pixel_values"]
+
+                image_id = row.get("__id__")
+
+                other_ids = []
+                label = row.get("label")
+                if label is not None:
+                    other_ids.append(label)
+
+                self.append_image(image, image_id=image_id, label=label)
+                continue
+
+            yield self.pop_batch()
+
+
+class PatchNPacker(MakeIterableMixin):
+    def __init__(self, patch_size, sequence_length, batch_size, rng=None):
+        self.patch_size = patch_size
+        self.packer = Packer(sequence_length, batch_size, rng)
+
+    def append_image(
+        self,
+        pixel_values,
+        image_id=None,
+        **named_metadata_ids,
+    ):
+        """
+        Append an image to be packed, along with a unique identifier and any metadata ids
+
+        Each additional named_metadata_id if specified has to be an integer
+        """
+        assert (
+            id != MASK_IMAGE_ID
+        ), f"{image_id} cannot be the same as the mask image id {MASK_IMAGE_ID}"
+
+        patches, positions = patch(pixel_values, self.patch_size)
+
+        s = len(patches)
+
+        full = lambda x: torch.full((s,), x, dtype=torch.long, device=patches.device)
+        image_ids = full(image_id)
+
+        named_metadata_ids = {k: full(x) for k, x in named_metadata_ids.items()}
+
+        named_columns = dict(
+            patches=patches,
+            positions=positions,
+            image_ids=image_ids,
+            **named_metadata_ids,
+        )
+
+        sequence = TensorSequence(named_columns=named_columns)
+
+        self.packer.append(sequence)
+
+    def can_pop_batch(self):
+        return self.packer.can_pop_batch()
+
+    def pop_batch(self):
+        return self.packer.pop_batch()
 
 
 class ContextTargetPatchNPacker(MakeIterableMixin):
@@ -320,22 +331,11 @@ class ContextTargetPatchNPacker(MakeIterableMixin):
         self.sequence_length_context = sequence_length_context
         self.sequence_length_target = sequence_length_target
         self.sequence_length_prediction = sequence_length_prediction
-        self.patchnpacker_context = PatchNPacker(
-            patch_size=patch_size,
-            sequence_length=sequence_length_context,
-            batch_size=batch_size,
-        )
-        self.patchnpacker_target = PatchNPacker(
-            patch_size=patch_size,
-            sequence_length=sequence_length_target,
-            batch_size=batch_size,
-        )
         self.num_prediction_targets = num_prediction_targets
 
-        self.all_packers = [
-            self.patchnpacker_context,
-            self.patchnpacker_target,
-        ]
+        self.context_packer = Packer(sequence_length_context, batch_size, rng)
+        self.target_packer = Packer(sequence_length_target, batch_size, rng)
+
         self.patch_size = patch_size
         self.batch_size = batch_size
         self.rng = rng
@@ -343,28 +343,30 @@ class ContextTargetPatchNPacker(MakeIterableMixin):
 
     def append_image(
         self,
-        image,
-        id=None,
+        pixel_values,
+        image_id=None,
         **named_metadata_ids,
     ):
-        _, h, w = image.shape
-        device = image.device
+        _, h, w = pixel_values.shape
         nph = h // self.patch_size
         npw = w // self.patch_size
 
-        if id is None:
-            id = self.__id
+        if image_id is None:
+            image_id = self.__id
             self.__id += 1
 
-        patches, positions = self.patchnpacker_target.patch(image)
+        patches, positions = patch(pixel_values, self.patch_size)
+        sequence_length = patches.shape[0]
+        if sequence_length > self.sequence_length_target:
+            raise ValueError(
+                f"image has too many patches {sequence_length} to be packed into size {self.sequence_length_target}"
+            )
 
-        sequence_length = len(patches)
-
+        # Pads the metadata ids to the full sequence length
         full = lambda x: torch.full(
-            (sequence_length,), x, dtype=torch.long, device=image.device
+            (sequence_length,), x, dtype=torch.long, device=pixel_values.device
         )
-        image_ids = full(id)
-
+        image_ids = full(image_id)
         named_metadata_ids = {k: full(x) for k, x in named_metadata_ids.items()}
 
         named_columns = {
@@ -380,20 +382,16 @@ class ContextTargetPatchNPacker(MakeIterableMixin):
             named_columns=named_columns,
         )
 
-        assert sequence.sequence_length == nph * npw
+        return self._append_sequence(sequence, nph, npw)
 
-        # Randomly downsamples the sequence length if it is too long
-        if sequence.sequence_length > self.sequence_length_target:
-            downsample_mask = get_sample_mask(
-                sequence.sequence_length, self.sequence_length_target, self.rng
-            )
-            downsample_mask = downsample_mask.to(device)
-            sequence = sequence.iloc[downsample_mask]
-        else:
-            downsample_mask = None
-
-        # Samples 4 rectangular target blocks
-        target_blocks = []
+    def _append_sequence(
+        self,
+        sequence,
+        nph,
+        npw,
+    ):
+        # Samples 4 rectangular blocks that will be used for prediction loss
+        prediction_block_masks = []
         for _ in range(self.num_prediction_targets):
             target_block = sample_rect_mask(
                 nph,
@@ -405,24 +403,20 @@ class ContextTargetPatchNPacker(MakeIterableMixin):
                 rng=self.rng,
             ).flatten()
 
-            if downsample_mask is not None:
-                target_block = target_block.iloc[downsample_mask]
+            prediction_block_masks.append(target_block)
 
-            target_blocks.append(target_block)
+        # shape: (S, self.num_prediction_targets)
+        # the num_prediction_targets is the last dimension
+        prediction_block_masks = torch.stack(prediction_block_masks, -1)
 
         # Samples 1 rectangular context block
         context_block = sample_rect_mask(
             nph, npw, 0.85, 1.0, 1.0, 1.0, rng=self.rng
         ).flatten()
 
-        if downsample_mask is not None:
-            context_block = context_block.iloc[downsample_mask]
-
-        # the context block might need to be downsampled to fit inside the max context sequence length
-
         # target_any is a mask that is true if a patch is part of a target block
-        # shape: nph * npw
-        target_any = sum(target_blocks) > 0
+        # shape: (S,)
+        target_any = prediction_block_masks.sum(-1) > 0
 
         # context is removed wherever the target mask is true,
         # this is to make it more difficult to predict the target from the context, because they don't overlap
@@ -431,22 +425,18 @@ class ContextTargetPatchNPacker(MakeIterableMixin):
         # Only contains the patches in the context block
         context_sequence = sequence.iloc[context_block]
 
-        for i, target_block in enumerate(target_blocks):
-            sequence.named_columns[f"target_block{i}"] = target_block
+        # Adds a new columns to the sequence with the prediction block masks
+        sequence.named_columns["prediction_block_masks"] = prediction_block_masks
 
-        self.patchnpacker_context._append_sequence(context_sequence)
-        self.patchnpacker_target._append_sequence(sequence)
+        self.context_packer._append(context_sequence)
+        self.target_packer._append(sequence)
 
-        # if one of the packers flush, they all have to flush
-        # this keeps them in sync
-        did_flush = any(p._did_flush for p in self.all_packers)
-        if did_flush:
-            for p in self.all_packers:
-                if not p._did_flush:
-                    p._flush_sequence()
+        if self.context_packer._needs_flush() or self.target_packer._needs_flush():
+            self.target_packer._flush()
+            self.context_packer._flush()
 
     def can_pop_batch(self):
-        return all(p.can_pop_batch() for p in self.all_packers)
+        return self.context_packer.can_pop_batch()
 
     def pop_batch(self):
         """
@@ -456,54 +446,33 @@ class ContextTargetPatchNPacker(MakeIterableMixin):
         if not self.can_pop_batch():
             return None
 
-        return tuple(p.pop_batch() for p in self.all_packers)
+        return self.context_packer.pop_batch(), self.target_packer.pop_batch()
 
     def make_prediction_target_sequence(
-        self, tgt: TensorSequence, ctx: TensorSequence, tgt_block_mask
+        self, target: TensorSequence, context: TensorSequence, prediction_block_mask
     ):
-        """
-        tgt_block_mask is a boolean mask of shape (B S) which is set to True for sequence
-         elements that are prediction targets.
-
-        tgt is a TensorSequence containing patches and other sequence data of the data to be predicted
-
-        ctx is a TensorSequence containing patches and other sequence data of the data to be used as the known independant variable
-
-        Returns a TensorSequence, where each sequence has the elements to be predicted and the context elements concatenated along the sequence dimension.
-
-        The sequence length of the returned TensorSequence is self.sequence_length_prediction + self.sequence_length_context
-
-        TODO could potentially waste less padding by unpacking the ctx_sequence and then repacking it together with the pred_sequence
-        """
-        device = tgt.all_columns[0].device
-        b = tgt_block_mask.shape[0]
-        tgt_block_mask = tgt_block_mask & (tgt["image_ids"] != MASK_IMAGE_ID)
+        device = target.all_columns[0].device
+        b = target.leading_shape[0]
 
         packed = []
         for i in range(b):
-            tgt_seq_mask = tgt_block_mask[i]
-            tgt_seq = tgt.iloc[i]
-            ctx_seq = ctx.iloc[i]
+            prediction_block_mask_sequence = prediction_block_mask[i]
+            target_sequence = target.iloc[i]
+            context_sequence = context.iloc[i]
 
-            # use only the target tokens that are included in the mask
-            # and are not padding
-            tgt_seq = tgt_seq.iloc[tgt_seq_mask]
+            target_sequence = target_sequence.iloc[prediction_block_mask_sequence]
 
-            # pack only the ctx tokens that are not padding
-            ctx_seq = ctx_seq.iloc[ctx_seq["image_ids"] != MASK_IMAGE_ID]
+            context_sequence = context_sequence.iloc[
+                context_sequence["image_ids"] != MASK_IMAGE_ID
+            ]
 
-            # pads up to the prediction sequence length
-            pad_amt = self.sequence_length_prediction - (
-                tgt_seq.sequence_length + ctx_seq.sequence_length
+            # TODO clamping to length might cause a problem if all of the prediction targets are randomly dropped
+            # which is possible
+            packed_sequence = clamp_tensorsequence_to_length(
+                [target_sequence, context_sequence],
+                self.sequence_length_prediction,
             )
-
-            assert (
-                pad_amt >= 0
-            ), f"prediction sequence length {tgt_seq.sequence_length + ctx_seq.sequence_length} too long by {-pad_amt}"
-            tgt_seq = tgt_seq.pad(pad_amt, MASK_IMAGE_ID)
-
-            packed_seq = TensorSequence.cat([ctx_seq, tgt_seq])
-            packed.append(packed_seq)
+            packed.append(packed_sequence)
 
         packed = TensorSequence.stack(packed)
 

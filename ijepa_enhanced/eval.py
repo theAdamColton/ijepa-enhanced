@@ -87,7 +87,10 @@ def eval_classification_probe(
 
     train_dataset = get_dataset(split="train", **config.dataset)
     dataloader = DataLoader(
-        train_dataset, num_workers=config.num_workers, collate_fn=None, batch_size=None
+        train_dataset,
+        num_workers=config.num_workers,
+        collate_fn=None,
+        batch_size=None,
     )
     dataloader = iter(dataloader)
 

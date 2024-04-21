@@ -2,7 +2,7 @@ import os
 import torch
 from torch.utils.data import DataLoader
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from ..patchnpack import MASK_IMAGE_ID, ContextTargetPatchNPacker, unpack
 from ..dataset import get_dataset
 from tensorsequence import TensorSequence
@@ -22,76 +22,70 @@ def main(config: DictConfig):
         sequence_length_prediction=config.train.sequence_length_prediction,
     )
 
-    max_res = config.model.vit.patch_size * min(
-        config.model.vit.max_height, config.model.vit.max_width
-    )
-
-    dataset = get_dataset(max_res=max_res, **config.train.dataset)
+    dataset = get_dataset(**config.train.dataset)
 
     dataloader = DataLoader(
         dataset,
         batch_size=None,
-        num_workers=config.train.num_workers,
+        num_workers=config.num_workers,
     )
     dataloader = iter(dataloader)
 
-    for ctx, tgt in patchnpacker.make_iter(dataloader):
-        batch_size = ctx.all_columns[0].shape[0]
-        is_tgt_mask = torch.zeros(batch_size, ctx.sequence_length, dtype=torch.bool)
-        ctx = TensorSequence(
-            named_columns=dict(
-                patches=ctx["patches"],
-                positions=ctx["positions"],
-                image_ids=ctx["image_ids"],
-                is_tgt_mask=is_tgt_mask,
-            ),
-            sequence_dim=ctx.sequence_dim,
+    for context, target in patchnpacker.make_iter(dataloader):
+        batch_size = context.leading_shape[0]
+        device = context.all_columns[0].device
+
+        is_prediction_mask = torch.zeros(
+            batch_size, context.sequence_length, dtype=torch.bool
         )
 
-        tgt_block_masks = [
-            tgt[f"target_block{i}"] for i in range(patchnpacker.num_prediction_targets)
-        ]
+        prediction_block_masks = target.named_columns.pop(
+            "prediction_block_masks"
+        ).unbind(-1)
 
-        is_tgt_mask = torch.ones(batch_size, tgt.sequence_length, dtype=torch.bool)
-        tgt = TensorSequence(
-            named_columns=dict(
-                patches=tgt["patches"],
-                positions=tgt["positions"],
-                image_ids=tgt["image_ids"],
-                is_tgt_mask=is_tgt_mask,
-            ),
-            sequence_dim=tgt.sequence_dim,
+        target.named_columns["is_prediction_mask"] = torch.ones(
+            target.leading_shape, device=device, dtype=torch.bool
         )
 
-        for j, tgt_block_mask in enumerate(tgt_block_masks):
+        context.named_columns["is_prediction_mask"] = torch.zeros(
+            context.leading_shape, device=device, dtype=torch.bool
+        )
+
+        for mask_i, prediction_block_mask in enumerate(prediction_block_masks):
             pred = patchnpacker.make_prediction_target_sequence(
-                tgt, ctx, tgt_block_mask
+                target, context, prediction_block_mask
             )
 
             # visualizes target patches
             for batch_index in range(pred.leading_shape[0]):
                 pred_seq = pred.iloc[batch_index]
+
                 patches = pred_seq["patches"]
                 positions = pred_seq["positions"]
                 ids = pred_seq["image_ids"]
-                is_tgt_mask = pred_seq["is_tgt_mask"]
                 is_pad = ids == MASK_IMAGE_ID
-                is_not_tgt_mask = ~is_tgt_mask & ~is_pad
-                is_tgt_mask = is_tgt_mask & ~is_pad
+                is_prediction_mask = pred_seq["is_prediction_mask"]
 
-                ctx_ids = ids[is_not_tgt_mask].unique()
+                is_not_prediction_mask = ~is_prediction_mask & ~is_pad
+                is_prediction_mask = is_prediction_mask & ~is_pad
+
+                ctx_ids = ids[is_not_prediction_mask].unique()
                 ctx_ids = set(int(i) for i in ctx_ids)
 
-                tgt_ids = ids[is_tgt_mask].unique()
+                tgt_ids = ids[is_prediction_mask].unique()
                 tgt_ids = set(int(i) for i in tgt_ids)
 
-                assert (
-                    ctx_ids == tgt_ids
-                ), "There should be both ctx and tgt patches for every id"
+                if not ctx_ids == tgt_ids:
+                    raise ValueError(
+                        (
+                            "There needs to exist both ctx and tgt patches for every id",
+                            (tgt_ids - ctx_ids, ctx_ids - tgt_ids),
+                        )
+                    )
 
                 # converts to float and slightly lightens the tgt rectangle
                 patches = patches / 255.0
-                patches[is_tgt_mask] = patches[is_tgt_mask] + 0.1
+                patches[is_prediction_mask] = patches[is_prediction_mask] + 0.1
 
                 images = unpack(patches, positions, ids, patchnpacker.patch_size, 3)
                 ids = ids[ids != MASK_IMAGE_ID].unique()
@@ -99,7 +93,7 @@ def main(config: DictConfig):
                 for id, image in zip(ids, images):
                     imsave(
                         image,
-                        f"viz-output/image-{id.item():04}-mask{j:04}.jpg",
+                        f"viz-output/image-{id.item():04}-mask{mask_i:04}.jpg",
                         norm=True,
                     )
 

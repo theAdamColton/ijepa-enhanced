@@ -1,11 +1,13 @@
 defaults:
   - _self_
-  - model: base_patch32
+  - model: base_patch16
   - train: default
   - eval: food101
 
 seed: 42
 torch_compile: False
+wandb_mode: disabled
+num_workers: 2
 
 train:
   dataset:
@@ -24,4 +26,3 @@ eval:
   dataset:
     crop_to_resolution_multiple_of: ${model.vit.patch_size}
 
-wandb_mode: disabled

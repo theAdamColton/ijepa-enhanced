@@ -159,7 +159,7 @@ def main(config: DictConfig):
     dataloader = DataLoader(
         dataset,
         batch_size=None,
-        num_workers=config.train.num_workers,
+        num_workers=config.num_workers,
     )
 
     patchnpacker = ContextTargetPatchNPacker(

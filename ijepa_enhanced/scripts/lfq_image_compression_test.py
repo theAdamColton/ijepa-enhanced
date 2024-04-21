@@ -6,7 +6,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from ..utils import imread, rand_log_uniform
+from ..utils import imread, random_log_uniform
 from ..lfq import LFQ, calculate_perplexity
 
 
@@ -90,12 +90,12 @@ def main():
     torch.manual_seed(42)
     for _ in range(300):
         d = dict(
-            learning_rate=rand_log_uniform(2e0, 1e-3),
-            entropy_weight=rand_log_uniform(1e0, 1e-5),
-            commit_weight=rand_log_uniform(1e0, 1e-5),
-            entropy_sample_minimization_weight=rand_log_uniform(100, 1e-4),
-            entropy_batch_maximization_weight=rand_log_uniform(100, 1e-4),
-            temperature=rand_log_uniform(100, 0.01),
+            learning_rate=random_log_uniform(2e0, 1e-3),
+            entropy_weight=random_log_uniform(1e0, 1e-5),
+            commit_weight=random_log_uniform(1e0, 1e-5),
+            entropy_sample_minimization_weight=random_log_uniform(100, 1e-4),
+            entropy_batch_maximization_weight=random_log_uniform(100, 1e-4),
+            temperature=random_log_uniform(100, 0.01),
         )
 
         loss, perplexity, xhat = do_train(device=device, **d)
