@@ -474,25 +474,26 @@ class ContextTargetPatchNPacker(MakeIterable):
         """
         device = tgt.all_columns[0].device
 
-        tgt_seq_packed = []
+        packed = []
         for tgt_seq_mask, tgt_seq, ctx_seq in zip(tgt_block_mask, tgt, ctx):
             # use only the target tokens that are included in the mask
             tgt_seq = tgt_seq[tgt_seq_mask]
 
-            # use only the ctx tokens that are not padding
+            # pack only the ctx tokens that are not padding
             ctx_seq = ctx_seq[ctx_seq.named_columns["image_ids"] != MASK_IMAGE_ID]
 
             # pads up to the prediction sequence length
-            pad_amt = self.sequence_length_prediction - tgt_seq.sequence_length
+            pad_amt = self.sequence_length_prediction - (
+                tgt_seq.sequence_length + ctx_seq.sequence_length
+            )
             assert (
                 pad_amt >= 0
-            ), f"prediction sequence length {tgt_seq.sequence_length} too long by {-pad_amt}"
-            if pad_amt > 0:
-                tgt_seq = tgt_seq.pad(pad_amt, MASK_IMAGE_ID)
+            ), f"prediction sequence length {tgt_seq.sequence_length + ctx_seq.sequence_length} too long by {-pad_amt}"
+            tgt_seq = tgt_seq.pad(pad_amt, MASK_IMAGE_ID)
 
-            tgt_seq_packed.append(tgt_seq)
+            packed_seq = TensorSequence.cat([ctx_seq, tgt_seq])
+            packed.append(packed_seq)
 
-        tgt_seq_packed = TensorSequence.stack(tgt_seq_packed)
-        tgt_seq_packed = TensorSequence.cat([tgt_seq_packed, ctx])
+        packed = TensorSequence.stack(packed)
 
-        return tgt_seq_packed
+        return packed

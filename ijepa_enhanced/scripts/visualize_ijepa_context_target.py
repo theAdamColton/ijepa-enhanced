@@ -35,7 +35,7 @@ def main(config: DictConfig):
     )
     dataloader = iter(dataloader)
 
-    for batch_i, (ctx, tgt) in enumerate(patchnpacker.make_iter(dataloader)):
+    for ctx, tgt in patchnpacker.make_iter(dataloader):
         batch_size = ctx.all_columns[0].shape[0]
         is_tgt_mask = torch.zeros(batch_size, ctx.sequence_length, dtype=torch.bool)
         ctx = TensorSequence(
@@ -48,12 +48,12 @@ def main(config: DictConfig):
             sequence_dim=ctx.sequence_dim,
         )
 
-        is_tgt_mask = torch.ones(batch_size, tgt.sequence_length, dtype=torch.bool)
         tgt_block_masks = [
             tgt.named_columns[f"target_block{i}"]
             for i in range(patchnpacker.num_prediction_targets)
         ]
 
+        is_tgt_mask = torch.ones(batch_size, tgt.sequence_length, dtype=torch.bool)
         tgt = TensorSequence(
             named_columns=dict(
                 patches=tgt.named_columns["patches"],
@@ -70,24 +70,36 @@ def main(config: DictConfig):
             )
 
             # visualizes target patches
-            for i, pred_seq in enumerate(pred):
+            for pred_seq in pred:
                 patches = pred_seq.named_columns["patches"]
                 positions = pred_seq.named_columns["positions"]
                 ids = pred_seq.named_columns["image_ids"]
                 is_tgt_mask = pred_seq.named_columns["is_tgt_mask"]
                 is_pad = ids == MASK_IMAGE_ID
+                is_not_tgt_mask = ~is_tgt_mask & ~is_pad
                 is_tgt_mask = is_tgt_mask & ~is_pad
 
-                # converts to f32 and slightly lightens the tgt rectangle
+                ctx_ids = ids[is_not_tgt_mask].unique()
+                ctx_ids = set(int(i) for i in ctx_ids)
+
+                tgt_ids = ids[is_tgt_mask].unique()
+                tgt_ids = set(int(i) for i in tgt_ids)
+
+                assert (
+                    ctx_ids == tgt_ids
+                ), "There should be both ctx and tgt patches for every id"
+
+                # converts to float and slightly lightens the tgt rectangle
                 patches = patches / 255.0
                 patches[is_tgt_mask] = patches[is_tgt_mask] + 0.1
 
                 images = unpack(patches, positions, ids, patchnpacker.patch_size, 3)
+                ids = ids[ids != MASK_IMAGE_ID].unique()
 
-                for image_i, image in enumerate(images):
+                for id, image in zip(ids, images):
                     imsave(
                         image,
-                        f"viz-output/batch{batch_i:04}-sequence{i:04}-image{image_i:04}-mask{j:04}.jpg",
+                        f"viz-output/image-{id.item():04}-mask{j:04}.jpg",
                         norm=True,
                     )
 

@@ -36,7 +36,13 @@ def compute_training_loss(
 ):
     device = accelerator.device
     # Compute target hidden states by passing the target patches through the teacher network
-    tgt_patches, tgt_positions, tgt_image_ids, *tgt_block_masks = tgt.columns
+    tgt_patches = tgt.named_columns["patches"]
+    tgt_positions = tgt.named_columns["positions"]
+    tgt_image_ids = tgt.named_columns["image_ids"]
+    tgt_block_masks = [
+        tgt.named_columns[f"target_block{i}"]
+        for i in range(patchnpacker.num_prediction_targets)
+    ]
     tgt_patches = tgt_patches / 255
     tgt_attn_mask = get_attention_mask(tgt_image_ids)
 
@@ -45,7 +51,9 @@ def compute_training_loss(
             tgt_states = teacher(tgt_patches, tgt_attn_mask, tgt_positions)
 
     # Compute the context hidden states by using the vit with gradients enabled
-    ctx_patches, ctx_positions, ctx_image_ids = ctx.columns
+    ctx_patches = ctx.named_columns["patches"]
+    ctx_positions = ctx.named_columns["positions"]
+    ctx_image_ids = ctx.named_columns["image_ids"]
     ctx_attn_mask = get_attention_mask(ctx_image_ids)
 
     # u8 -> float

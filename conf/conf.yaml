@@ -5,7 +5,7 @@ defaults:
   - eval: food101
 
 seed: 42
-torch_compile: True
+torch_compile: False
 
 train:
   dataset:
