@@ -134,8 +134,9 @@ TENSORSET_PADDING_VALUE_DICT = {
     "patches": 0,
     "states": 0,
     "prediction_block_masks": 0,
-    "is_prediction_mask": 0,
+    "prediction_mask": 0,
     "label": MASK_IMAGE_ID,
+    "ids": MASK_IMAGE_ID,
 }
 
 
@@ -448,7 +449,7 @@ class ContextTargetPatchNPacker(MakeIterableMixin):
 
         return self.context_packer.pop_batch(), self.target_packer.pop_batch()
 
-    def make_prediction_target_sequence(
+    def pack_prediction_target_sequence(
         self, target: TensorSequence, context: TensorSequence, prediction_block_mask
     ):
         device = target.all_columns[0].device

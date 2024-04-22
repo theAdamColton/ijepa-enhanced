@@ -15,6 +15,7 @@ class Predictor(nn.Module):
         num_attention_heads=8,
         num_hidden_layers=4,
         projection_dim=256,
+        projection_heads=4,
         max_height=64,
         max_width=64,
     ):
@@ -33,7 +34,11 @@ class Predictor(nn.Module):
         )
         self.is_prediction_token = nn.Parameter(torch.randn(hidden_size))
         self.pos_emb = PositionalEmbeddings(hidden_size, max_height, max_width)
-        self.pred_head = nn.Linear(hidden_size, projection_dim, bias=False)
+        self.pred_head = nn.Linear(
+            hidden_size, projection_dim * projection_heads, bias=False
+        )
+        self.projection_dim = projection_dim
+        self.projection_heads = projection_heads
 
     def forward(self, x, attention_mask, tgt_mask, position_ids):
         """
@@ -43,6 +48,9 @@ class Predictor(nn.Module):
             height_ids: height ids
             width_ids: width ids
         """
+
+        x = self.proj_in(x)
+
         # No patch information is permitted from the states to be predicted
         # They are still allowed to be attended to
         x = einx.multiply("b s z, b s -> b s z", x, ~tgt_mask)
@@ -53,12 +61,14 @@ class Predictor(nn.Module):
 
         # Add a special conditioning token for tokens that are the prediction target
         x = x + einx.multiply(
-            "b s z, b s -> b s z",
-            x,
-            tgt_mask * self.is_prediction_token,
+            "b s, z -> b s z",
+            tgt_mask,
+            self.is_prediction_token,
         )
 
         x = self.transformer(x, attention_mask)
         x = self.pred_head(x)
+
+        x = einx.rearrange("b s (h z) -> b s h z", x, h=self.projection_heads)
 
         return x

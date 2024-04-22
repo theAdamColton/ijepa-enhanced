@@ -1,7 +1,7 @@
 dim: ${..vit.hidden_size}
 codebook_size: 4096
 num_codebooks: 8
-sample_minimization_weight: 1.0
-batch_maximization_weight: 10.0
+sample_minimization_weight: ${...train.entropy_sample_minimization_weight}
+batch_maximization_weight: ${...train.entropy_batch_maximization_weight}
 temperature: 0.01
-eps: 1e-9
+eps: 1e-4

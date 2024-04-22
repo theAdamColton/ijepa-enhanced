@@ -209,6 +209,9 @@ class LFQ(nn.Module):
     def forward(
         self, x, mask=None, return_dict=None, return_indices=None, return_losses=None
     ):
+        """
+        mask: optional, is True where data is, is False where padding is
+        """
         x = self.project_in(x)
         x = einx.rearrange("... (c d) -> ... c d", x, c=self.num_codebooks)
         original_x = x

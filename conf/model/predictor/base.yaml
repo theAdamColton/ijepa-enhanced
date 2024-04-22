@@ -1,4 +1,7 @@
 hidden_size: 256
+input_size: ${..vit.hidden_size}
 intermediate_size: 1024
 num_attention_heads: 8
 num_hidden_layers: 4
+projection_dim: ${..lfq.codebook_size}
+projection_heads: ${..lfq.num_codebooks}

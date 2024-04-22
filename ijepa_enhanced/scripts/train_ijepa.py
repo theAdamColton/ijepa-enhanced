@@ -25,7 +25,109 @@ from ..dataset import get_dataset
 from ..optimizer import get_optimizer
 
 
-def compute_training_loss(
+def compute_target_states(teacher: EMA, lfq: LFQ, tgt: TensorSequence, accelerator):
+    # u8 to float
+    tgt_patches = tgt["patches"] / 255
+    tgt_image_ids = tgt["image_ids"]
+    tgt_positions = tgt["positions"]
+    tgt_attn_mask = get_attention_mask(tgt_image_ids)
+
+    with torch.no_grad():
+        with accelerator.autocast():
+            tgt_states = teacher(tgt_patches, tgt_attn_mask, tgt_positions)
+            lfq_result = lfq(tgt_states, return_indices=True, return_dict=True)
+            lfq_states = lfq_result["hidden_states"]
+            tgt_ids = lfq_result["indices"]
+
+    return TensorSequence(
+        named_columns={
+            "ids": tgt_ids,
+            "states": lfq_states,
+            "positions": tgt_positions,
+            "image_ids": tgt_image_ids,
+        },
+        sequence_dim=1,
+    )
+
+
+def compute_context_states(vit: ViT, lfq: LFQ, ctx: TensorSequence, accelerator):
+    # Compute the context hidden states by using the vit with gradients enabled
+    # u8 to float
+    ctx_patches = ctx.named_columns["patches"] / 255
+    ctx_positions = ctx.named_columns["positions"]
+    ctx_image_ids = ctx.named_columns["image_ids"]
+    ctx_attn_mask = get_attention_mask(ctx_image_ids)
+
+    with accelerator.autocast():
+        ctx_states = vit(ctx_patches, ctx_attn_mask, ctx_positions)
+        lfq_result = lfq(
+            ctx_states,
+            mask=ctx_image_ids != MASK_IMAGE_ID,
+            return_dict=True,
+            return_losses=True,
+        )
+        ctx_states = lfq_result["hidden_states"]
+        commit_loss = lfq_result["commit_loss"]
+        entropy_loss = lfq_result["entropy_loss"]
+
+    return (
+        TensorSequence(
+            named_columns={
+                "states": ctx_states,
+                "positions": ctx_positions,
+                "image_ids": ctx_image_ids,
+            },
+            sequence_dim=1,
+        ),
+        commit_loss,
+        entropy_loss,
+    )
+
+
+def compute_prediction_loss(
+    ctx,
+    tgt,
+    predictor,
+    prediction_block_masks,
+    patchnpacker: ContextTargetPatchNPacker,
+    accelerator,
+):
+    # Compute the loss from each target block mask and take the mean
+    # For each block, the target states to predict are concatenated with the context states
+
+    all_loss = []
+
+    for prediction_block_mask in prediction_block_masks.unbind(-1):
+        preds = patchnpacker.pack_prediction_target_sequence(
+            tgt, ctx, prediction_block_mask
+        )
+
+        pred_ids = preds["ids"]
+        pred_states = preds["states"]
+        pred_positions = preds["positions"]
+        pred_image_ids = preds["image_ids"]
+        pred_tgt_mask = preds["prediction_mask"]
+        # redo attention mask
+        pred_attn_mask = get_attention_mask(pred_image_ids)
+
+        with accelerator.autocast():
+            y = predictor(pred_states, pred_attn_mask, pred_tgt_mask, pred_positions)
+
+        # masked CE loss
+        pred_ids.masked_fill_(~pred_tgt_mask.unsqueeze(-1), MASK_IMAGE_ID)
+        num_classes = predictor.projection_dim
+        loss = F.cross_entropy(
+            y.view(-1, num_classes),
+            pred_ids.view(-1),
+            ignore_index=MASK_IMAGE_ID,
+        )
+        all_loss.append(loss)
+
+    loss = torch.stack(all_loss).mean()
+    return loss
+
+
+def compute_training_losses(
     vit: ViT,
     lfq: LFQ,
     teacher: EMA,
@@ -37,52 +139,22 @@ def compute_training_loss(
 ):
     device = accelerator.device
     # Compute target hidden states by passing the target patches through the teacher network
-    tgt_patches = tgt.named_columns["patches"]
-    tgt_positions = tgt.named_columns["positions"]
-    tgt_image_ids = tgt.named_columns["image_ids"]
-    tgt_block_masks = [
-        tgt.named_columns[f"target_block{i}"]
-        for i in range(patchnpacker.num_prediction_targets)
-    ]
-    tgt_patches = tgt_patches / 255
-    tgt_attn_mask = get_attention_mask(tgt_image_ids)
 
-    with torch.no_grad():
-        with accelerator.autocast():
-            tgt_states = teacher(tgt_patches, tgt_attn_mask, tgt_positions)
-            tgt_ids = lfq(tgt_states, return_indices=True, return_dict=True)["indices"]
+    prediction_block_masks = tgt["prediction_block_masks"]
 
-    import bpdb
+    tgt = tgt.to_device(device)
+    tgt = compute_target_states(teacher, lfq, tgt, accelerator)
 
-    bpdb.set_trace()
-
-    # Compute the context hidden states by using the vit with gradients enabled
-    ctx_patches = ctx.named_columns["patches"]
-    ctx_positions = ctx.named_columns["positions"]
-    ctx_image_ids = ctx.named_columns["image_ids"]
-    ctx_attn_mask = get_attention_mask(ctx_image_ids)
-
-    # u8 -> float
-    ctx_patches = ctx_patches / 255
-    with accelerator.autocast():
-        ctx_states = vit(ctx_patches, ctx_attn_mask, ctx_positions)
+    ctx = ctx.to_device(device)
+    ctx, commit_loss, entropy_loss = compute_context_states(vit, lfq, ctx, accelerator)
 
     tgt_batch_size, tgt_sequence_length = tgt.all_columns[0].shape[:2]
     tgt_pred_mask = torch.ones(
         tgt_batch_size, tgt_sequence_length, device=device, dtype=torch.bool
     )
-    tgt = TensorSequence(
-        named_columns={
-            "states": tgt_states,
-            "positions": tgt_positions,
-            "image_ids": tgt_image_ids,
-            "pred_mask": tgt_pred_mask,
-        },
-        sequence_dim=tgt.sequence_dim,
-    )
+    tgt.named_columns["prediction_mask"] = tgt_pred_mask
 
-    ctx_batch_size = ctx_patches.shape[0]
-    ctx_sequence_length = ctx_patches.shape[1]
+    ctx_batch_size, ctx_sequence_length = ctx.leading_shape[:2]
 
     # building block for masking out preds
     # pred_mask is 1 where the patch is a prediction instead of a context
@@ -90,47 +162,25 @@ def compute_training_loss(
         ctx_batch_size, ctx_sequence_length, device=device, dtype=torch.bool
     )
 
-    ctx = TensorSequence(
-        named_columns={
-            "states": ctx_states,
-            "positions": ctx_positions,
-            "image_ids": ctx_image_ids,
-            "pred_mask": ctx_pred_mask,
-        },
-        sequence_dim=ctx.sequence_dim,
+    ctx_ids = torch.full(
+        (ctx_batch_size, ctx_sequence_length, lfq.num_codebooks),
+        MASK_IMAGE_ID,
+        device=device,
+        dtype=torch.long,
     )
 
-    # Compute the loss from each target block mask and take the mean
-    # For each block, the target states to predict are concatenated with the context states
+    ctx.named_columns["prediction_mask"] = ctx_pred_mask
+    ctx.named_columns["ids"] = ctx_ids
 
-    all_loss = []
+    prediction_loss = compute_prediction_loss(
+        ctx, tgt, predictor, prediction_block_masks, patchnpacker, accelerator
+    )
 
-    for tgt_block_mask in tgt_block_masks:
-        tgt_preds = patchnpacker.make_prediction_target_sequence(
-            tgt, ctx, tgt_block_mask
-        )
-
-        pred_states = tgt_preds.named_columns["states"]
-        pred_positions = tgt_preds.named_columns["positions"]
-        pred_image_ids = tgt_preds.named_columns["image_ids"]
-        pred_tgt_mask = tgt_preds.named_columns["pred_mask"]
-        # redo attention mask
-        pred_attn_mask = get_attention_mask(pred_image_ids)
-
-        with accelerator.autocast():
-            y = predictor(pred_states, pred_attn_mask, pred_tgt_mask, pred_positions)
-
-        # l1 loss
-
-        # precision issues with masked mean here
-        # loss = masked_mean(y - pred_states, pred_tgt_mask).mean()
-
-        loss = F.l1_loss(y[pred_tgt_mask], pred_states[pred_tgt_mask])
-
-        all_loss.append(loss)
-
-    loss = torch.stack(all_loss).mean()
-    return loss
+    return {
+        "prediction_loss": prediction_loss,
+        "commit_loss": commit_loss,
+        "entropy_loss": entropy_loss,
+    }
 
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="conf")
@@ -144,13 +194,12 @@ def main(config: DictConfig):
     )
 
     vit = ViT(**config.model.vit)
-
     lfq = LFQ(**config.model.lfq)
+    predictor = Predictor(**config.model.predictor)
 
     teacher = EMA(vit, **config.train.ema)
     print("vit: ", end="")
     print_num_parameters(vit)
-    predictor = Predictor()
     print("predictor: ", end="")
     print_num_parameters(predictor)
     print("lfq: ", end="")
@@ -162,10 +211,7 @@ def main(config: DictConfig):
         predictor.forward = torch.compile(predictor.forward)
         lfq.forward = torch.compile(lfq.forward)
 
-    max_res = config.model.vit.patch_size * min(
-        config.model.vit.max_height, config.model.vit.max_width
-    )
-    dataset = get_dataset(max_res=max_res, **config.train.dataset)
+    dataset = get_dataset(**config.train.dataset)
 
     dataloader = DataLoader(
         dataset,
@@ -189,7 +235,7 @@ def main(config: DictConfig):
     device = accelerator.device
 
     vit, predictor, teacher, lfq, optimizer = accelerator.prepare(
-        vit, predictor, lfq, teacher, optimizer
+        vit, predictor, teacher, lfq, optimizer
     )
 
     id = 1
@@ -204,9 +250,10 @@ def main(config: DictConfig):
         ctx.to_device(device)
         tgt.to_device(device)
 
-        loss = compute_training_loss(
+        loss_dict = compute_training_losses(
             vit,
             lfq,
+            teacher,
             predictor,
             accelerator,
             ctx,
@@ -214,12 +261,18 @@ def main(config: DictConfig):
             patchnpacker,
         )
 
+        loss = (
+            config.train.commit_loss_weight * loss_dict["commit_loss"]
+            + config.train.entropy_loss_weight * loss_dict["entropy_loss"]
+            + loss_dict["prediction_loss"]
+        )
+
         accelerator.backward(loss)
         optimizer.step()
 
         teacher.update()
 
-        print(f"train loss: {loss.item():.5f} step {step}")
+        print(f"train loss: {loss.item():.5f} loss_dict: {loss_dict} step {step}")
         wandb.log({"train": {"loss": loss}}, step=step)
 
         if (step + 1) % config.train.eval_every_num_steps == 0:

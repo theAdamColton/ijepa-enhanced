@@ -1,3 +1,4 @@
 defaults:
   - vit: base_patch16
   - predictor: base
+  - lfq: base

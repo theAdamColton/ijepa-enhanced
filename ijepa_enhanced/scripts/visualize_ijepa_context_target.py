@@ -35,7 +35,7 @@ def main(config: DictConfig):
         batch_size = context.leading_shape[0]
         device = context.all_columns[0].device
 
-        is_prediction_mask = torch.zeros(
+        prediction_mask = torch.zeros(
             batch_size, context.sequence_length, dtype=torch.bool
         )
 
@@ -43,16 +43,16 @@ def main(config: DictConfig):
             "prediction_block_masks"
         ).unbind(-1)
 
-        target.named_columns["is_prediction_mask"] = torch.ones(
+        target.named_columns["prediction_mask"] = torch.ones(
             target.leading_shape, device=device, dtype=torch.bool
         )
 
-        context.named_columns["is_prediction_mask"] = torch.zeros(
+        context.named_columns["prediction_mask"] = torch.zeros(
             context.leading_shape, device=device, dtype=torch.bool
         )
 
         for mask_i, prediction_block_mask in enumerate(prediction_block_masks):
-            pred = patchnpacker.make_prediction_target_sequence(
+            pred = patchnpacker.pack_prediction_target_sequence(
                 target, context, prediction_block_mask
             )
 
@@ -64,15 +64,15 @@ def main(config: DictConfig):
                 positions = pred_seq["positions"]
                 ids = pred_seq["image_ids"]
                 is_pad = ids == MASK_IMAGE_ID
-                is_prediction_mask = pred_seq["is_prediction_mask"]
+                prediction_mask = pred_seq["prediction_mask"]
 
-                is_not_prediction_mask = ~is_prediction_mask & ~is_pad
-                is_prediction_mask = is_prediction_mask & ~is_pad
+                is_not_prediction_mask = ~prediction_mask & ~is_pad
+                prediction_mask = prediction_mask & ~is_pad
 
                 ctx_ids = ids[is_not_prediction_mask].unique()
                 ctx_ids = set(int(i) for i in ctx_ids)
 
-                tgt_ids = ids[is_prediction_mask].unique()
+                tgt_ids = ids[prediction_mask].unique()
                 tgt_ids = set(int(i) for i in tgt_ids)
 
                 if not ctx_ids == tgt_ids:
@@ -85,7 +85,7 @@ def main(config: DictConfig):
 
                 # converts to float and slightly lightens the tgt rectangle
                 patches = patches / 255.0
-                patches[is_prediction_mask] = patches[is_prediction_mask] + 0.1
+                patches[prediction_mask] = patches[prediction_mask] + 0.1
 
                 images = unpack(patches, positions, ids, patchnpacker.patch_size, 3)
                 ids = ids[ids != MASK_IMAGE_ID].unique()
