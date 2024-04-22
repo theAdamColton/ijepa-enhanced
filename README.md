@@ -29,5 +29,15 @@ ViTs can benifit from allowing the attention process to attend to nothing. This 
 
 ### Bugs
 
-* Patchnpack context-target sometimes gives context and target different ids
-* Patchnpack context-target the target blocks can be sampled exterior to the context rect which is not good
+* Patchnpack context-target the target blocks can be sampled exterior to the context rect which is not as described in the ijepa paper
+
+### TODO
+
+* During training, report rate-distortion loss using nd-ngram terms
+* Report prediction-sequence padding rate, context padding rate, and target padding rate
+* Make transformer model the same as used in IJEPA
+* Load pretrained IJEPA models
+* LFQ and Masked cross entropy loss, hard CE loss VS soft CE loss, (discretizing labels vs leaving labels as normalized probs)
+* should position information be given for tokens that are not being predicted? Yes: They will be stored as nd-kgrams with their positions explicitly known, they don't need to encode their positions in and of themselves.
+* Test that attention mask works
+* Benchmark patchnpack and optimize

@@ -27,6 +27,7 @@ from ..optimizer import get_optimizer
 
 def compute_training_loss(
     vit: ViT,
+    lfq: LFQ,
     teacher: EMA,
     predictor: Predictor,
     accelerator,
@@ -49,6 +50,11 @@ def compute_training_loss(
     with torch.no_grad():
         with accelerator.autocast():
             tgt_states = teacher(tgt_patches, tgt_attn_mask, tgt_positions)
+            tgt_ids = lfq(tgt_states, return_indices=True, return_dict=True)["indices"]
+
+    import bpdb
+
+    bpdb.set_trace()
 
     # Compute the context hidden states by using the vit with gradients enabled
     ctx_patches = ctx.named_columns["patches"]
@@ -139,17 +145,22 @@ def main(config: DictConfig):
 
     vit = ViT(**config.model.vit)
 
+    lfq = LFQ(**config.model.lfq)
+
     teacher = EMA(vit, **config.train.ema)
     print("vit: ", end="")
     print_num_parameters(vit)
     predictor = Predictor()
     print("predictor: ", end="")
     print_num_parameters(predictor)
+    print("lfq: ", end="")
+    print_num_parameters(lfq)
 
     if config.torch_compile:
         vit.forward = torch.compile(vit.forward)
         teacher.forward = torch.compile(teacher.forward)
         predictor.forward = torch.compile(predictor.forward)
+        lfq.forward = torch.compile(lfq.forward)
 
     max_res = config.model.vit.patch_size * min(
         config.model.vit.max_height, config.model.vit.max_width
@@ -177,8 +188,8 @@ def main(config: DictConfig):
     accelerator = accelerate.Accelerator()
     device = accelerator.device
 
-    vit, predictor, teacher, optimizer = accelerator.prepare(
-        vit, predictor, teacher, optimizer
+    vit, predictor, teacher, lfq, optimizer = accelerator.prepare(
+        vit, predictor, lfq, teacher, optimizer
     )
 
     id = 1
@@ -195,7 +206,7 @@ def main(config: DictConfig):
 
         loss = compute_training_loss(
             vit,
-            teacher,
+            lfq,
             predictor,
             accelerator,
             ctx,

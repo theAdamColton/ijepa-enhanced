@@ -1,3 +1,4 @@
+import torch
 import einx
 from torch import nn
 
@@ -8,6 +9,7 @@ from .vit import PositionalEmbeddings
 class Predictor(nn.Module):
     def __init__(
         self,
+        input_size=768,
         hidden_size=768,
         intermediate_size=2048,
         num_attention_heads=8,
@@ -17,7 +19,11 @@ class Predictor(nn.Module):
         max_width=64,
     ):
         super().__init__()
+        self.input_size = input_size
         self.hidden_size = hidden_size
+        self.proj_in = nn.Sequential(
+            nn.Linear(input_size, hidden_size, bias=False), nn.LayerNorm(hidden_size)
+        )
         self.transformer = Transformer(
             hidden_size,
             num_hidden_layers,
@@ -25,25 +31,34 @@ class Predictor(nn.Module):
             hidden_size // num_attention_heads,
             intermediate_size,
         )
+        self.is_prediction_token = nn.Parameter(torch.randn(hidden_size))
         self.pos_emb = PositionalEmbeddings(hidden_size, max_height, max_width)
+        self.pred_head = nn.Linear(hidden_size, projection_dim, bias=False)
 
     def forward(self, x, attention_mask, tgt_mask, position_ids):
         """
         x: All input patch data
         tgt_mask: Is True where the patch is a prediction target
-        height_ids: height ids
-        width_ids: width ids
+        position_ids: Contains:
+            height_ids: height ids
+            width_ids: width ids
         """
-        # No information is permitted from the states to be predicted
+        # No patch information is permitted from the states to be predicted
+        # They are still allowed to be attended to
         x = einx.multiply("b s z, b s -> b s z", x, ~tgt_mask)
 
         # TODO! should position information be given for tokens that are not being predicted?
+        # yes
+        x = x + self.pos_emb(position_ids)
+
+        # Add a special conditioning token for tokens that are the prediction target
         x = x + einx.multiply(
             "b s z, b s -> b s z",
-            self.pos_emb(position_ids),
-            tgt_mask,
+            x,
+            tgt_mask * self.is_prediction_token,
         )
 
         x = self.transformer(x, attention_mask)
+        x = self.pred_head(x)
 
         return x
