@@ -267,6 +267,7 @@ class PatchNPacker(MakeIterableMixin):
     def __init__(self, patch_size, sequence_length, batch_size, rng=None):
         self.patch_size = patch_size
         self.packer = Packer(sequence_length, batch_size, rng)
+        self.__id = 0
 
     def append_image(
         self,
@@ -279,8 +280,12 @@ class PatchNPacker(MakeIterableMixin):
 
         Each additional named_metadata_id if specified has to be an integer
         """
+        if image_id is None:
+            image_id = self.__id
+            self.__id += 1
+
         assert (
-            id != MASK_IMAGE_ID
+            image_id != MASK_IMAGE_ID
         ), f"{image_id} cannot be the same as the mask image id {MASK_IMAGE_ID}"
 
         patches, positions = patch(pixel_values, self.patch_size)

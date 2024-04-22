@@ -83,6 +83,16 @@ def main(config: DictConfig):
                         )
                     )
 
+                for id in tgt_ids:
+                    seen_positions = set()
+                    mask = ids == id
+                    for height, width in positions[mask]:
+                        hw = (height.item(), width.item())
+                        assert (
+                            hw not in seen_positions
+                        ), f"duplicate positions for image {id}"
+                        seen_positions.add(hw)
+
                 # converts to float and slightly lightens the tgt rectangle
                 patches = patches / 255.0
                 patches[prediction_mask] = patches[prediction_mask] + 0.1

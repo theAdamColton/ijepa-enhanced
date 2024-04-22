@@ -1,5 +1,5 @@
+import einx
 from tqdm import tqdm
-import wandb
 import torch
 import accelerate
 import torch.nn.functional as F
@@ -9,9 +9,11 @@ from .patchnpack import MASK_IMAGE_ID, PatchNPacker, get_attention_mask
 from .optimizer import get_optimizer
 
 
-def make_pred(ctx, vit, predictor, predictor_head, accelerator):
-    ctx_patches, ctx_positions, ctx_image_ids = ctx.columns
-    ctx_labels = ctx.named_columns["label"]
+def make_pred(ctx, vit, lfq, predictor, predictor_head, accelerator):
+    ctx_patches = ctx["patches"]
+    ctx_positions = ctx["positions"]
+    ctx_image_ids = ctx["image_ids"]
+    ctx_labels = ctx["label"]
 
     ctx_attn_mask = get_attention_mask(ctx_image_ids)
     ctx_patches = ctx_patches / 255
@@ -19,6 +21,7 @@ def make_pred(ctx, vit, predictor, predictor_head, accelerator):
     with torch.no_grad():
         with accelerator.autocast():
             hidden_states = vit(ctx_patches, ctx_attn_mask, ctx_positions)
+            hidden_states = lfq(hidden_states, return_dict=True)["hidden_states"]
 
     with accelerator.autocast():
         tgt_mask = torch.zeros_like(ctx_attn_mask[:, 0])
@@ -41,6 +44,9 @@ def make_pred(ctx, vit, predictor, predictor_head, accelerator):
         all_hidden_states.append(hidden_states)
 
     all_hidden_states = torch.stack(all_hidden_states)
+
+    all_hidden_states = einx.rearrange("b h z -> b (h z)", all_hidden_states)
+
     with accelerator.autocast():
         logits = predictor_head(all_hidden_states)
 
@@ -52,6 +58,7 @@ def make_pred(ctx, vit, predictor, predictor_head, accelerator):
 
 def eval_classification_probe(
     vit,
+    lfq,
     predictor,
     config,
     predictor_head=None,
@@ -66,7 +73,7 @@ def eval_classification_probe(
     predictor = predictor.train()
     if predictor_head is None:
         predictor_head = torch.nn.Linear(
-            predictor.hidden_size,
+            predictor.projection_dim * predictor.projection_heads,
             config.dataset.num_classes,
             bias=False,
             device=device,
@@ -94,8 +101,8 @@ def eval_classification_probe(
     )
     dataloader = iter(dataloader)
 
-    vit, predictor, predictor_head, optimizer = accelerator.prepare(
-        vit, predictor, predictor_head, optimizer
+    vit, predictor, lfq, predictor_head, optimizer = accelerator.prepare(
+        vit, predictor, lfq, predictor_head, optimizer
     )
 
     step = 0
@@ -105,7 +112,7 @@ def eval_classification_probe(
         ctx.to_device(accelerator.device)
 
         loss, logits, labels = make_pred(
-            ctx, vit, predictor, predictor_head, accelerator
+            ctx, vit, lfq, predictor, predictor_head, accelerator
         )
 
         print(f"eval loss {loss:.4f} step {step}")
@@ -119,8 +126,9 @@ def eval_classification_probe(
         if step > config.max_iterations:
             break
 
-    patchnpacker.reset()
-    patchnpacker.batch_size = config.batch_size_validation
+    patchnpacker = PatchNPacker(
+        vit.patch_size, config.sequence_length, config.batch_size_validation
+    )
 
     validation_dataset = get_dataset(split="validation", **config.dataset)
     dataloader = DataLoader(
@@ -141,7 +149,7 @@ def eval_classification_probe(
 
         with torch.inference_mode():
             loss, logits, labels = make_pred(
-                ctx, vit, predictor, predictor_head, accelerator
+                ctx, vit, lfq, predictor, predictor_head, accelerator
             )
 
         preds = logits.argmax(-1)

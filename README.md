@@ -41,3 +41,4 @@ ViTs can benifit from allowing the attention process to attend to nothing. This 
 * should position information be given for tokens that are not being predicted? Yes: They will be stored as nd-kgrams with their positions explicitly known, they don't need to encode their positions in and of themselves.
 * Test that attention mask works
 * Benchmark patchnpack and optimize
+* TOME

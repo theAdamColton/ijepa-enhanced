@@ -13,7 +13,7 @@ from tensorsequence import TensorSequence
 from ..vit import ViT
 from ..ema import EMA
 from ..predictor import Predictor
-from ..lfq import LFQ, masked_mean
+from ..lfq import LFQ, calculate_perplexity, masked_mean
 from ..patchnpack import (
     MASK_IMAGE_ID,
     ContextTargetPatchNPacker,
@@ -176,10 +176,15 @@ def compute_training_losses(
         ctx, tgt, predictor, prediction_block_masks, patchnpacker, accelerator
     )
 
+    perplexity = calculate_perplexity(
+        tgt["ids"], predictor.projection_dim, MASK_IMAGE_ID
+    )
+
     return {
         "prediction_loss": prediction_loss,
         "commit_loss": commit_loss,
         "entropy_loss": entropy_loss,
+        "perplexity": perplexity,
     }
 
 
@@ -238,8 +243,6 @@ def main(config: DictConfig):
         vit, predictor, teacher, lfq, optimizer
     )
 
-    id = 1
-
     step = 0
 
     dataloader = iter(dataloader)
@@ -272,12 +275,17 @@ def main(config: DictConfig):
 
         teacher.update()
 
-        print(f"train loss: {loss.item():.5f} loss_dict: {loss_dict} step {step}")
+        loss_stmt = " ".join([f"{k}:{v.item():.5f}" for k, v in loss_dict.items()])
+
+        print(f"train loss: {loss.item():.5f} {loss_stmt} step {step}")
         wandb.log({"train": {"loss": loss}}, step=step)
+
+        del loss_dict
+        del ctx, tgt
 
         if (step + 1) % config.train.eval_every_num_steps == 0:
             loss = eval_classification_probe(
-                vit, copy.deepcopy(predictor), config.eval, None, accelerator
+                vit, lfq, copy.deepcopy(predictor), config.eval, None, accelerator
             )
             wandb.log({"eval": {"loss": loss}})
             vit.train()
