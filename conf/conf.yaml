@@ -21,7 +21,7 @@ eval:
   num_workers: ${num_workers}
   sequence_length: ${train.sequence_length_target}
   optimizer: ${train.optimizer}
-  max_iterations: 30
+  max_iterations: 100
   torch_compile: ${..torch_compile}
 
   dataset:
