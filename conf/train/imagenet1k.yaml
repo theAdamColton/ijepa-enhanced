@@ -1,6 +1,6 @@
 defaults:
   - optimizer: adamw
-batch_size: 8
+batch_size: 16
 mixed_precision: "fp16"
 gradient_accumulation_steps: 1
 resume_checkpoint: ""
@@ -9,14 +9,14 @@ ema:
 sequence_length_context: 512
 sequence_length_target: 1024
 sequence_length_prediction: 1024
-commit_loss_weight: 1e-1
-entropy_loss_weight: 1.0
-entropy_sample_minimization_weight: 10.0
+commit_loss_weight: 1e-3
+entropy_loss_weight: 1e-2
+entropy_sample_minimization_weight: 1.0
 entropy_batch_maximization_weight: 0.1
-eval_every_num_steps: 50
+eval_every_num_steps: 500
+max_steps: 501
+
 dataset:
-  path: food101
-  type: hf-image
-  image_column_name: image
-  split: train
+  path: /hdd/imagenet1k/imagenet1k-train-{0000..1023}.tar
+  image_column_name: jpg
   max_res: 256

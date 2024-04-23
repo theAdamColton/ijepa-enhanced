@@ -247,6 +247,8 @@ def main(config: DictConfig):
 
     dataloader = iter(dataloader)
 
+    accuracy = -9999999
+
     for ctx, tgt in patchnpacker.make_iter(dataloader):
         optimizer.zero_grad()
 
@@ -278,20 +280,25 @@ def main(config: DictConfig):
         loss_stmt = " ".join([f"{k}:{v.item():.5f}" for k, v in loss_dict.items()])
 
         print(f"train loss: {loss.item():.5f} {loss_stmt} step {step}")
-        wandb.log({"train": {"loss": loss}}, step=step)
+        wandb.log({"train": loss_dict}, step=step)
 
         del loss_dict
         del ctx, tgt
 
         if (step + 1) % config.train.eval_every_num_steps == 0:
-            loss = eval_classification_probe(
-                vit, lfq, copy.deepcopy(predictor), config.eval, None, accelerator
+            accuracy = eval_classification_probe(
+                vit, lfq, copy.deepcopy(predictor), config, None, accelerator
             )
-            wandb.log({"eval": {"loss": loss}})
+            wandb.log({"eval": {"accuracy": accuracy}})
             vit.train()
             predictor.train()
 
+        if step > config.train.max_steps:
+            break
+
         step += 1
+
+    return -accuracy
 
 
 if __name__ == "__main__":

@@ -1,8 +1,0 @@
-dataset:
-  path: food101
-  type: hf-image
-  num_classes: 101
-
-batch_size: 32
-batch_size_validation: 128
-

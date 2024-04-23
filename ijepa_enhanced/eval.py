@@ -74,7 +74,7 @@ def eval_classification_probe(
     if predictor_head is None:
         predictor_head = torch.nn.Linear(
             predictor.projection_dim * predictor.projection_heads,
-            config.dataset.num_classes,
+            config.eval.dataset.num_classes,
             bias=False,
             device=device,
         )
@@ -85,14 +85,14 @@ def eval_classification_probe(
         predictor_head.forward = torch.compile(predictor_head.forward)
 
     patchnpacker = PatchNPacker(
-        vit.patch_size, config.sequence_length, config.batch_size
+        vit.patch_size, config.eval.sequence_length, config.eval.batch_size
     )
     optimizer = get_optimizer(
-        config.optimizer,
+        config.eval.optimizer,
         list(predictor.parameters()) + list(predictor_head.parameters()),
     )
 
-    train_dataset = get_dataset(split="train", **config.dataset)
+    train_dataset = get_dataset(**config.train.dataset)
     dataloader = DataLoader(
         train_dataset,
         num_workers=config.num_workers,
@@ -123,14 +123,14 @@ def eval_classification_probe(
 
         step += 1
 
-        if step > config.max_iterations:
+        if step > config.eval.max_iterations:
             break
 
     patchnpacker = PatchNPacker(
-        vit.patch_size, config.sequence_length, config.batch_size_validation
+        vit.patch_size, config.eval.sequence_length, config.eval.batch_size_validation
     )
 
-    validation_dataset = get_dataset(split="validation", **config.dataset)
+    validation_dataset = get_dataset(**config.eval.dataset)
     dataloader = DataLoader(
         validation_dataset,
         num_workers=config.num_workers,
@@ -142,7 +142,12 @@ def eval_classification_probe(
     all_preds = []
     all_labels = []
 
-    progress_bar = tqdm(desc="validation", total=len(validation_dataset))
+    try:
+        n = len(validation_dataset)
+    except:
+        n = None
+
+    progress_bar = tqdm(desc="validation", total=n)
 
     for ctx in patchnpacker.make_iter(dataloader):
         ctx.to_device(device)
@@ -158,9 +163,13 @@ def eval_classification_probe(
         all_labels.append(labels.cpu())
 
         progress_bar.update(len(preds))
+        if progress_bar.n > n:
+            break
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
     accuracy = ((all_preds == all_labels) * 1.0).mean()
 
     print("accuracy:", accuracy)
+
+    return accuracy

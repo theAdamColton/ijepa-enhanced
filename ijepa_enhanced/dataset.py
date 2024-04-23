@@ -87,40 +87,18 @@ class ToTorchRGB8:
         return row
 
 
-def get_wds_image_dataset(
-    path,
-    max_res=None,
-    min_res=None,
-    handler=wds.handlers.reraise_exception,
-    image_column_name="jpg",
-):
-    ds = (
-        wds.WebDataset(path)
-        .decode("rgb8", handler=handler)
-        .rename(pixel_values=image_column_name, handler=handler)
-        .map(ToTorchRGB8())
-    )
-
-    if min_res:
-        ds = ds.select(FilterMinRes(min_res))
-    if max_res:
-        ds = ds.map_dict(pixel_values=ResizeToMax(max_res), handler=handler)
-
-    return ds
-
-
 def get_dataset(
-    type="hf-image",  # or 'wds-image'
-    split="train",
     path="mnist",  # hf dataset path or wds dataset path
-    download_url="",  # for debug
     num_classes=None,
-    image_column_name="image",
-    cls_column_name=None,  # None or string
+    download_path=None,
+    image_column_name="jpg",
+    cls_column_name="cls",
     max_rows=None,
     crop_to_resolution_multiple_of=None,
     max_res=None,
+    min_res=None,
     seed=42,
+    handler=wds.handlers.reraise_exception,
 ):
     """
     returns a iterable, where each row of the iterable will have an accessible 'pixel_values',
@@ -131,49 +109,27 @@ def get_dataset(
         print(f"  max resolution: {max_res}")
     if crop_to_resolution_multiple_of:
         print(f"  crop to resolution multiple of: {crop_to_resolution_multiple_of}")
+        if min_res is None:
+            min_res = crop_to_resolution_multiple_of
+    if min_res:
+        print(f"  min res: {min_res}")
 
-    if type == "hf-image":
-        ds = datasets.load_dataset(
-            path,
-            split=split,
-        ).rename_column(image_column_name, "pixel_values")
-        if cls_column_name:
-            ds = ds.rename_column(cls_column_name, "label")
-        # ds.set_format("torch", columns=["pixel_values"], output_all_columns=True)
+    ds = (
+        wds.WebDataset(path)
+        .decode("rgb8", handler=handler)
+        .rename(pixel_values=image_column_name, handler=handler)
+        .rename(label=cls_column_name, handler=handler)
+        .map(ToTorchRGB8())
+    )
+    if max_res:
+        ds = ds.map_dict(pixel_values=ResizeToMax(max_res), handler=handler)
+    if min_res:
+        ds = ds.select(FilterMinRes(min_res))
+    if crop_to_resolution_multiple_of:
+        ds = ds.map_dict(pixel_values=CropToMultipleOf(crop_to_resolution_multiple_of))
 
-        if max_rows:
-            ds = ds.select(range(max_rows))
-
-        def transform(row):
-            pixel_values = row.pop("pixel_values")
-            pixel_values = np.asarray(pixel_values)
-            pixel_values = torch.from_numpy(pixel_values)
-            pixel_values = einx.rearrange("... h w c -> ... c h w", pixel_values)
-
-            if max_res is not None:
-                pixel_values = resize_to_max(pixel_values, max_res)
-
-            if crop_to_resolution_multiple_of is not None:
-                pixel_values = CropToMultipleOf(crop_to_resolution_multiple_of)(
-                    pixel_values
-                )
-
-            row["pixel_values"] = pixel_values
-            return row
-
-        ds.set_transform(transform, columns="pixel_values", output_all_columns=True)
-        ds = ds.shuffle(seed)
-    elif type == "wds-image":
-        ds = get_wds_image_dataset(
-            path, image_column_name=image_column_name, max_res=max_res
-        )
+    ds = ds.shuffle(1000, rng=random.Random(seed))
+    if max_rows:
         ds = ds.with_length(max_rows)
-        if crop_to_resolution_multiple_of:
-            ds = ds.map_dict(
-                pixel_values=CropToMultipleOf(crop_to_resolution_multiple_of)
-            )
-        ds = ds.shuffle(1000, rng=random.Random(seed))
-    else:
-        raise ValueError(type)
 
     return ds

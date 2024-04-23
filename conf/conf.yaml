@@ -1,13 +1,14 @@
 defaults:
   - _self_
   - model: base_patch16
-  - train: default
-  - eval: food101
+  - train: imagenet1k
+  - eval: imagenet1k
+
 
 seed: 42
 torch_compile: False
 wandb_mode: disabled
-num_workers: 2
+num_workers: 4
 
 train:
   dataset:
@@ -25,4 +26,5 @@ eval:
 
   dataset:
     crop_to_resolution_multiple_of: ${model.vit.patch_size}
+
 
