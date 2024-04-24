@@ -174,6 +174,6 @@ def eval_classification_probe(
     all_labels = torch.cat(all_labels)
     accuracy = ((all_preds == all_labels) * 1.0).mean()
 
-    log.info("accuracy:", accuracy)
+    log.info(f"accuracy:{accuracy}")
 
     return accuracy
