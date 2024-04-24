@@ -28,3 +28,4 @@ eval:
     crop_to_resolution_multiple_of: ${model.vit.patch_size}
 
 
+pretrained_model_path: pretrained-models

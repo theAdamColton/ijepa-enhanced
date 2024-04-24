@@ -1,3 +1,4 @@
+name: predictor-base
 hidden_size: 384
 input_size: ${..vit.hidden_size}
 intermediate_size: 1536

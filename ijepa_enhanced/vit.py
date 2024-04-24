@@ -53,6 +53,7 @@ class ViT(nn.Module):
         max_height: int = 64,
         max_width: int = 64,
         gradient_checkpoint=False,
+        name="",
     ):
         super().__init__()
 

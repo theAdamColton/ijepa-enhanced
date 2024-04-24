@@ -1,6 +1,7 @@
 __pycache__/
 wandb/
 multirun/
+pretrained-models/
 viz-output/
 test-files/
 outputs/

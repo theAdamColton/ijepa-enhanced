@@ -1,3 +1,4 @@
+name: vit-base-patch16
 hidden_size: 768
 intermediate_size: 3072
 num_attention_heads: 12

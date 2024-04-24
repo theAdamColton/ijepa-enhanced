@@ -116,6 +116,7 @@ class LFQ(nn.Module):
         batch_maximization_weight=1.0,
         temperature=0.1,
         eps=1e-9,
+        name="",
     ):
         """
         dim: Integer dimension of input features
@@ -224,12 +225,12 @@ class LFQ(nn.Module):
             ret_dict["indices"] = indices
 
         if return_losses:
-            # logits = 2 * torch.einsum(
-            #     "... i d, j d -> ... i j",
-            #     original_x,
-            #     self.codebook,
-            # )
-            logits = torch.stack((original_x, -original_x), -1)
+            logits = 2 * torch.einsum(
+                "... i d, j d -> ... i j",
+                original_x,
+                self.codebook,
+            )
+            # logits = torch.stack((original_x, -original_x), -1)
             # logits = original_x.unsqueeze(-1)
             loss = entropy_loss(
                 logits,

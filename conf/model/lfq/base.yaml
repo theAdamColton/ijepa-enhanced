@@ -1,3 +1,4 @@
+name: lfq-base
 dim: ${..vit.hidden_size}
 codebook_size: 256
 num_codebooks: 4

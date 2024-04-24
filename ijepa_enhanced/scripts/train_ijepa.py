@@ -1,4 +1,5 @@
 import copy
+import safetensors.torch
 from typing import Optional
 import torch
 import torch.nn.functional as F
@@ -201,8 +202,14 @@ def main(config: DictConfig):
     )
 
     vit = ViT(**config.model.vit)
+    safetensors.torch.load_model(
+        vit, "./pretrained-models/vit-base-patch16.safetensors"
+    )
     lfq = LFQ(**config.model.lfq)
     predictor = Predictor(**config.model.predictor)
+    safetensors.torch.load_model(
+        predictor, "./pretrained-models/predictor-base.safetensors"
+    )
 
     teacher = EMA(vit, **config.train.ema)
     print("vit: ", end="")

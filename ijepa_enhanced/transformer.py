@@ -12,14 +12,13 @@ class MLP(nn.Module):
         in_features,
         hidden_features,
         out_features=None,
-        act_layer=nn.GELU,
     ):
         super().__init__()
         out_features = out_features or in_features
         self.layers = nn.Sequential(
-            nn.Linear(in_features, hidden_features),
-            act_layer(),
-            nn.Linear(hidden_features, out_features),
+            nn.Linear(in_features, hidden_features, bias=False),
+            nn.GELU(),
+            nn.Linear(hidden_features, out_features, bias=False),
         )
 
     def forward(self, x):
