@@ -8,6 +8,10 @@ from .dataset import get_dataset
 from .patchnpack import MASK_IMAGE_ID, PatchNPacker, get_attention_mask
 from .optimizer import get_optimizer
 
+import logging
+
+log = logging.getLogger(__name__)
+
 
 def make_pred(ctx, vit, lfq, predictor, predictor_head, accelerator):
     ctx_patches = ctx["patches"]
@@ -115,7 +119,7 @@ def eval_classification_probe(
             ctx, vit, lfq, predictor, predictor_head, accelerator
         )
 
-        print(f"eval loss {loss:.4f} step {step}")
+        log.info(f"eval loss {loss:.4f} step {step}")
 
         accelerator.backward(loss)
         optimizer.step()
@@ -170,6 +174,6 @@ def eval_classification_probe(
     all_labels = torch.cat(all_labels)
     accuracy = ((all_preds == all_labels) * 1.0).mean()
 
-    print("accuracy:", accuracy)
+    log.info("accuracy:", accuracy)
 
     return accuracy

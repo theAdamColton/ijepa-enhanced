@@ -64,7 +64,6 @@ class ViT(nn.Module):
         self.to_patch_embedding = nn.Sequential(
             nn.LayerNorm(patch_dim),
             nn.Linear(patch_dim, hidden_size, bias=False),
-            nn.LayerNorm(hidden_size),
         )
 
         self.pos_emb = PositionalEmbeddings(hidden_size, max_height, max_width)

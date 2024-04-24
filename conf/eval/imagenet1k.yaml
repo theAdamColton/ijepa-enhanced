@@ -2,8 +2,9 @@ dataset:
   path: /hdd/imagenet1k/imagenet1k-validation-{00..63}.tar
   image_column_name: jpg
   num_classes: 1000
-  max_res: 256
+  max_res: ${...train.dataset.max_res}
   max_rows: 5000
 
+max_iterations: 80
 batch_size: 32
 batch_size_validation: 128

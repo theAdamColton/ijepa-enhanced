@@ -81,4 +81,4 @@ class Transformer(nn.Module):
                 )
             else:
                 x = layer(x, attention_mask)
-        return x
+        return self.norm(x)

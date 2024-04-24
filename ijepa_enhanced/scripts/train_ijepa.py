@@ -14,7 +14,12 @@ from tensorsequence import TensorSequence
 from ..vit import ViT
 from ..ema import EMA
 from ..predictor import Predictor
-from ..lfq import LFQ, calculate_perplexity, masked_mean
+
+from ..lfq import LFQ
+from ..lfq import calculate_perplexity, masked_mean
+
+# from vector_quantize_pytorch import LFQ
+
 from ..patchnpack import (
     MASK_IMAGE_ID,
     ContextTargetPatchNPacker,
@@ -25,8 +30,12 @@ from ..utils import print_num_parameters
 from ..dataset import get_dataset
 from ..optimizer import get_optimizer
 
+import logging
 
-def compute_target_states(teacher: EMA, lfq: LFQ, tgt: TensorSequence, accelerator):
+log = logging.getLogger(__name__)
+
+
+def compute_target_states(teacher: EMA, lfq: EMA, tgt: TensorSequence, accelerator):
     # u8 to float
     tgt_patches = tgt["patches"] / 255
     tgt_image_ids = tgt["image_ids"]
@@ -131,6 +140,7 @@ def compute_prediction_loss(
 def compute_training_losses(
     vit: ViT,
     lfq: LFQ,
+    lfq_teacher: EMA,
     teacher: EMA,
     predictor: Predictor,
     accelerator,
@@ -144,7 +154,7 @@ def compute_training_losses(
     prediction_block_masks = tgt["prediction_block_masks"]
 
     tgt = tgt.to_device(device)
-    tgt = compute_target_states(teacher, lfq, tgt, accelerator)
+    tgt = compute_target_states(teacher, lfq_teacher, tgt, accelerator)
 
     ctx = ctx.to_device(device)
     ctx, commit_loss, entropy_loss = compute_context_states(vit, lfq, ctx, accelerator)
@@ -191,7 +201,7 @@ def compute_training_losses(
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="conf")
 def main(config: DictConfig):
-    print(OmegaConf.to_yaml(config))
+    log.info(OmegaConf.to_yaml(config))
 
     torch.set_float32_matmul_precision("medium")
 
@@ -202,14 +212,15 @@ def main(config: DictConfig):
     )
 
     vit = ViT(**config.model.vit)
-    safetensors.torch.load_model(
-        vit, "./pretrained-models/vit-base-patch16.safetensors"
-    )
+    # safetensors.torch.load_model(
+    #     vit, "./pretrained-models/vit-base-patch16.safetensors"
+    # )
     lfq = LFQ(**config.model.lfq)
+    lfq_teacher = EMA(lfq, **config.train.ema)
     predictor = Predictor(**config.model.predictor)
-    safetensors.torch.load_model(
-        predictor, "./pretrained-models/predictor-base.safetensors"
-    )
+    # safetensors.torch.load_model(
+    #     predictor, "./pretrained-models/predictor-base.safetensors"
+    # )
 
     teacher = EMA(vit, **config.train.ema)
     print("vit: ", end="")
@@ -224,6 +235,7 @@ def main(config: DictConfig):
         teacher.forward = torch.compile(teacher.forward)
         predictor.forward = torch.compile(predictor.forward)
         lfq.forward = torch.compile(lfq.forward)
+        lfq_teacher.forward = torch.compile(lfq_teacher.forward)
 
     dataset = get_dataset(**config.train.dataset)
 
@@ -248,8 +260,8 @@ def main(config: DictConfig):
     accelerator = accelerate.Accelerator()
     device = accelerator.device
 
-    vit, predictor, teacher, lfq, optimizer = accelerator.prepare(
-        vit, predictor, teacher, lfq, optimizer
+    vit, predictor, teacher, lfq, lfq_teacher, optimizer = accelerator.prepare(
+        vit, predictor, teacher, lfq, lfq_teacher, optimizer
     )
 
     step = 0
@@ -267,6 +279,7 @@ def main(config: DictConfig):
         loss_dict = compute_training_losses(
             vit,
             lfq,
+            lfq_teacher,
             teacher,
             predictor,
             accelerator,
@@ -288,7 +301,7 @@ def main(config: DictConfig):
 
         loss_stmt = " ".join([f"{k}:{v.item():.5f}" for k, v in loss_dict.items()])
 
-        print(f"train loss: {loss.item():.5f} {loss_stmt} step {step}")
+        log.info(f"train loss: {loss.item():.5f} {loss_stmt} step {step}")
         wandb.log({"train": loss_dict}, step=step)
 
         del loss_dict

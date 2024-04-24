@@ -21,11 +21,11 @@ eval:
   num_workers: ${num_workers}
   sequence_length: ${train.sequence_length_target}
   optimizer: ${train.optimizer}
-  max_iterations: 100
   torch_compile: ${..torch_compile}
 
   dataset:
     crop_to_resolution_multiple_of: ${model.vit.patch_size}
+    max_res: ${train.dataset.max_res}
 
 
 pretrained_model_path: pretrained-models
