@@ -3,19 +3,27 @@ from torch import nn
 import torch.nn.functional as F
 import einx
 
+from torch.utils.checkpoint import checkpoint
 
-class FeedForward(nn.Module):
-    def __init__(self, dim, hidden_dim):
+
+class MLP(nn.Module):
+    def __init__(
+        self,
+        in_features,
+        hidden_features,
+        out_features=None,
+        act_layer=nn.GELU,
+    ):
         super().__init__()
-        self.ff = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, dim),
+        out_features = out_features or in_features
+        self.layers = nn.Sequential(
+            nn.Linear(in_features, hidden_features),
+            act_layer(),
+            nn.Linear(hidden_features, out_features),
         )
 
     def forward(self, x):
-        return self.ff(x)
+        return self.layers(x)
 
 
 class Attention(nn.Module):
@@ -23,43 +31,55 @@ class Attention(nn.Module):
         super().__init__()
         inner_dim = dim_head * heads
         self.heads = heads
-        self.norm = nn.LayerNorm(dim)
-
-        self.attend = nn.Softmax(dim=-1)
-
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-        self.to_out = nn.Linear(inner_dim, dim, bias=False)
+        self.qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+        self.proj = nn.Linear(inner_dim, dim, bias=False)
 
     def forward(self, x, attention_mask=None):
         """
         attention_mask: A boolean mask where a value of True indicates that the element should take part in attention
         """
-        x = self.norm(x)
-
-        q, k, v = self.to_qkv(x).chunk(3, dim=-1)
-
+        q, k, v = self.qkv(x).chunk(3, dim=-1)
         x = F.scaled_dot_product_attention(q, k, v, attention_mask)
+        return self.proj(x)
 
-        return self.to_out(x)
+
+class TransformerBlock(nn.Module):
+    def __init__(self, dim, heads, dim_head, mlp_dim):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = Attention(
+            dim,
+            heads,
+            dim_head,
+        )
+        self.norm2 = nn.LayerNorm(dim)
+        self.mlp = MLP(dim, mlp_dim)
+
+    def forward(self, x, attention_mask=None):
+        x = self.attn(self.norm1(x), attention_mask)
+        x = x + self.mlp(self.norm2(x))
+        return x
 
 
 class Transformer(nn.Module):
-    def __init__(self, dim, depth, heads, dim_head, mlp_dim):
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim, gradient_checkpoint=False):
         super().__init__()
+        self.depth = depth
+        self.layers = nn.Sequential(
+            *[TransformerBlock(dim, heads, dim_head, mlp_dim) for _ in range(depth)]
+        )
         self.norm = nn.LayerNorm(dim)
-        self.layers = nn.ModuleList([])
-        for _ in range(depth):
-            self.layers.append(
-                nn.ModuleList(
-                    [
-                        Attention(dim, heads=heads, dim_head=dim_head),
-                        FeedForward(dim, mlp_dim),
-                    ]
-                )
-            )
+        self.gradient_checkpoint = gradient_checkpoint
 
     def forward(self, x, attention_mask=None):
-        for attn, ff in self.layers:
-            x = attn(x, attention_mask) + x
-            x = ff(x) + x
-        return self.norm(x)
+        for layer in self.layers:
+            if self.gradient_checkpoint:
+                x = checkpoint(
+                    layer,
+                    x,
+                    attention_mask,
+                    use_reentrant=False,
+                )
+            else:
+                x = layer(x, attention_mask)
+        return x

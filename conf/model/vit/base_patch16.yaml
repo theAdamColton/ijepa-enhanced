@@ -5,3 +5,5 @@ num_hidden_layers: 12
 patch_size: 16
 max_height: 32
 max_width: 32
+gradient_checkpoint: ${...train.gradient_checkpoint}
+

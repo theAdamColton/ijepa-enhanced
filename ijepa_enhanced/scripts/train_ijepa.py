@@ -192,6 +192,8 @@ def compute_training_losses(
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
 
+    torch.set_float32_matmul_precision("medium")
+
     wandb.init(
         name="ijepa-enhanced",
         config=config,

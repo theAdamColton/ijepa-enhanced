@@ -7,7 +7,7 @@ defaults:
 
 seed: 42
 torch_compile: False
-wandb_mode: disabled
+wandb_mode: disabled # online
 num_workers: 4
 
 train:

@@ -25,6 +25,22 @@ class PositionalEmbeddings(nn.Module):
 
 
 class ViT(nn.Module):
+    """
+    This differs from a usual vit in two ways:
+    1.) Input processing
+    There is no conv2d layer to process input patches.
+    The input patches are simplyt projected using a linear projection.
+    There is a norm before, and after this linear projection.
+    Input pixels have their statistics tracked per patch position.
+
+    2.) Position processing
+    This ViT uses factorized absolute positional embeddings.
+    There are seperate embedding tables for height and width positions.
+    The two embeddings are combined using addition.
+
+    The transformer block is exactly the same as a usual vit.
+    """
+
     def __init__(
         self,
         hidden_size: int = 768,
@@ -36,6 +52,7 @@ class ViT(nn.Module):
         dim_head: int = 64,
         max_height: int = 64,
         max_width: int = 64,
+        gradient_checkpoint=False,
     ):
         super().__init__()
 
@@ -45,7 +62,7 @@ class ViT(nn.Module):
 
         self.to_patch_embedding = nn.Sequential(
             nn.LayerNorm(patch_dim),
-            nn.Linear(patch_dim, hidden_size),
+            nn.Linear(patch_dim, hidden_size, bias=False),
             nn.LayerNorm(hidden_size),
         )
 
@@ -57,6 +74,7 @@ class ViT(nn.Module):
             num_attention_heads,
             dim_head,
             intermediate_size,
+            gradient_checkpoint=gradient_checkpoint,
         )
 
     def forward(
@@ -69,6 +87,8 @@ class ViT(nn.Module):
         x: Image patches, shape (... patch_dim)
         height_indices: Height indices of the patch positions
         width_indices: Width indices of the patch positions
+
+        Returns unnormalized tensor x
         """
 
         x = self.to_patch_embedding(x)
