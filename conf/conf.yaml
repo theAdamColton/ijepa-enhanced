@@ -20,7 +20,6 @@ eval:
   batch_size_validation: ${train.batch_size_validation}
   num_workers: ${num_workers}
   sequence_length: ${train.sequence_length_target}
-  optimizer: ${train.optimizer}
   torch_compile: ${..torch_compile}
 
   dataset:

@@ -13,13 +13,9 @@ from tensorsequence import TensorSequence
 
 from ..vit import ViT
 from ..ema import EMA
+from ..teacher import Teacher
 from ..predictor import Predictor
-
-from ..lfq import LFQ
-from ..lfq import calculate_perplexity, masked_mean
-
-# from vector_quantize_pytorch import LFQ
-
+from ..lfq import calculate_perplexity, LFQ
 from ..patchnpack import (
     MASK_IMAGE_ID,
     ContextTargetPatchNPacker,
@@ -35,24 +31,21 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def compute_target_states(teacher: EMA, lfq: EMA, tgt: TensorSequence, accelerator):
+def compute_target_states(teacher: Teacher, tgt: TensorSequence, accelerator):
     # u8 to float
     tgt_patches = tgt["patches"] / 255
     tgt_image_ids = tgt["image_ids"]
     tgt_positions = tgt["positions"]
     tgt_attn_mask = get_attention_mask(tgt_image_ids)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         with accelerator.autocast():
-            tgt_states = teacher(tgt_patches, tgt_attn_mask, tgt_positions)
-            lfq_result = lfq(tgt_states, return_indices=True, return_dict=True)
-            lfq_states = lfq_result["hidden_states"]
-            tgt_ids = lfq_result["indices"]
+            tgt_ids, tgt_states = teacher(tgt_patches, tgt_attn_mask, tgt_positions)
 
     return TensorSequence(
         named_columns={
             "ids": tgt_ids,
-            "states": lfq_states,
+            "states": tgt_states,
             "positions": tgt_positions,
             "image_ids": tgt_image_ids,
         },
@@ -124,7 +117,6 @@ def compute_prediction_loss(
             y = predictor(pred_states, pred_attn_mask, pred_tgt_mask, pred_positions)
 
         # masked CE loss
-        pred_ids.masked_fill_(~pred_tgt_mask.unsqueeze(-1), MASK_IMAGE_ID)
         num_classes = predictor.projection_dim
         loss = F.cross_entropy(
             y.view(-1, num_classes),
@@ -140,8 +132,7 @@ def compute_prediction_loss(
 def compute_training_losses(
     vit: ViT,
     lfq: LFQ,
-    lfq_teacher: EMA,
-    teacher: EMA,
+    teacher: Teacher,
     predictor: Predictor,
     accelerator,
     ctx: TensorSequence,
@@ -151,10 +142,9 @@ def compute_training_losses(
     device = accelerator.device
     # Compute target hidden states by passing the target patches through the teacher network
 
-    prediction_block_masks = tgt["prediction_block_masks"]
-
     tgt = tgt.to_device(device)
-    tgt = compute_target_states(teacher, lfq_teacher, tgt, accelerator)
+    prediction_block_masks = tgt["prediction_block_masks"]
+    tgt = compute_target_states(teacher, tgt, accelerator)
 
     ctx = ctx.to_device(device)
     ctx, commit_loss, entropy_loss = compute_context_states(vit, lfq, ctx, accelerator)
@@ -187,9 +177,10 @@ def compute_training_losses(
         ctx, tgt, predictor, prediction_block_masks, patchnpacker, accelerator
     )
 
-    perplexity = calculate_perplexity(
-        tgt["ids"], predictor.projection_dim, MASK_IMAGE_ID
-    )
+    with torch.inference_mode():
+        perplexity = calculate_perplexity(
+            tgt["ids"], predictor.projection_dim, MASK_IMAGE_ID
+        )
 
     return {
         "prediction_loss": prediction_loss,
@@ -216,13 +207,12 @@ def main(config: DictConfig):
     #     vit, "./pretrained-models/vit-base-patch16.safetensors"
     # )
     lfq = LFQ(**config.model.lfq)
-    lfq_teacher = EMA(lfq, **config.train.ema)
     predictor = Predictor(**config.model.predictor)
     # safetensors.torch.load_model(
     #     predictor, "./pretrained-models/predictor-base.safetensors"
     # )
 
-    teacher = EMA(vit, **config.train.ema)
+    teacher = Teacher(vit, lfq, **config.train.ema)
     print("vit: ", end="")
     print_num_parameters(vit)
     print("predictor: ", end="")
@@ -235,7 +225,6 @@ def main(config: DictConfig):
         teacher.forward = torch.compile(teacher.forward)
         predictor.forward = torch.compile(predictor.forward)
         lfq.forward = torch.compile(lfq.forward)
-        lfq_teacher.forward = torch.compile(lfq_teacher.forward)
 
     dataset = get_dataset(**config.train.dataset)
 
@@ -260,8 +249,8 @@ def main(config: DictConfig):
     accelerator = accelerate.Accelerator()
     device = accelerator.device
 
-    vit, predictor, teacher, lfq, lfq_teacher, optimizer = accelerator.prepare(
-        vit, predictor, teacher, lfq, lfq_teacher, optimizer
+    vit, predictor, teacher, lfq, optimizer = accelerator.prepare(
+        vit, predictor, teacher, lfq, optimizer
     )
 
     step = 0
@@ -273,13 +262,9 @@ def main(config: DictConfig):
     for ctx, tgt in patchnpacker.make_iter(dataloader):
         optimizer.zero_grad()
 
-        ctx.to_device(device)
-        tgt.to_device(device)
-
         loss_dict = compute_training_losses(
             vit,
             lfq,
-            lfq_teacher,
             teacher,
             predictor,
             accelerator,
@@ -287,6 +272,7 @@ def main(config: DictConfig):
             tgt,
             patchnpacker,
         )
+        del ctx, tgt
 
         loss = (
             config.train.commit_loss_weight * loss_dict["commit_loss"]
@@ -305,7 +291,6 @@ def main(config: DictConfig):
         wandb.log({"train": loss_dict}, step=step)
 
         del loss_dict
-        del ctx, tgt
 
         if (step + 1) % config.train.eval_every_num_steps == 0:
             accuracy = eval_classification_probe(

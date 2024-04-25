@@ -86,8 +86,9 @@ def entropy_loss(
     log_probs = F.log_softmax(logits / temperature + eps, -1)
 
     if mask is not None:
-        avg_probs = masked_mean(probs, mask)
-        avg_probs = einx.mean("... D -> D", avg_probs)
+        avg_probs = einx.mean("... D -> D", probs[mask])
+        # avg_probs = masked_mean(probs, mask)
+        # avg_probs = einx.mean("... D -> D", avg_probs)
     else:
         avg_probs = einx.mean("... D -> D", probs)
 
@@ -95,7 +96,8 @@ def entropy_loss(
 
     sample_entropy = -torch.sum(probs * log_probs, -1)
     if mask is not None:
-        sample_entropy = masked_mean(sample_entropy, mask).mean()
+        sample_entropy = sample_entropy[mask].mean()
+        # sample_entropy = masked_mean(sample_entropy, mask).mean()
     else:
         sample_entropy = torch.mean(sample_entropy)
 
@@ -245,7 +247,8 @@ class LFQ(nn.Module):
             # commit loss applied between the tensors before and after the straight-through step
             commit_loss = F.mse_loss(original_x, x.detach(), reduction="none")
             if mask is not None:
-                commit_loss = masked_mean(commit_loss, mask)
+                # commit_loss = masked_mean(commit_loss, mask)
+                commit_loss = commit_loss[mask]
             commit_loss = commit_loss.mean()
             ret_dict["commit_loss"] = commit_loss
 

@@ -18,7 +18,7 @@ class EMA(nn.Module):
         self.beta = beta
         # hack so that the model is not saved in the state dict
         self.model = [model]
-        self.ema_model = deepcopy(model)
+        self.ema_model = deepcopy(model).eval()
         self.ema_model.requires_grad_(False)
 
     def update(self):

@@ -8,3 +8,11 @@ dataset:
 max_iterations: 80
 batch_size: 32
 batch_size_validation: 128
+optimizer:
+  name: AdamW
+  args:
+    lr: 5e-5
+    weight_decay: 5e-2
+    betas:
+      - 0.9
+      - 0.99

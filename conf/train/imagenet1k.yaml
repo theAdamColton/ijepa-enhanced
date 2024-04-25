@@ -6,13 +6,13 @@ gradient_accumulation_steps: 1
 gradient_checkpoint: True
 resume_checkpoint: ""
 ema:
-  beta: 0.995
+  beta: 0.996
 sequence_length_context: 512
 sequence_length_target: 1024
 sequence_length_prediction: 1024
-commit_loss_weight: 1e0
-entropy_loss_weight: 1e1
-entropy_sample_minimization_weight: 1e-1
+commit_loss_weight: 1e-4
+entropy_loss_weight: 1e0
+entropy_sample_minimization_weight: 1e0
 entropy_batch_maximization_weight: 1e0
 eval_every_num_steps: 5000
 max_steps: 10001
@@ -20,5 +20,5 @@ max_steps: 10001
 dataset:
   path: /hdd/imagenet1k/imagenet1k-train-{0000..1023}.tar
   image_column_name: jpg
-  max_res: 384
+  max_res: 512
 
