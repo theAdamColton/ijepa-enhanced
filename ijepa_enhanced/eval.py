@@ -83,11 +83,6 @@ def eval_classification_probe(
             device=device,
         )
 
-    if config.torch_compile:
-        vit.forward = torch.compile(vit.forward)
-        predictor.forward = torch.compile(predictor.forward)
-        predictor_head.forward = torch.compile(predictor_head.forward)
-
     patchnpacker = PatchNPacker(
         vit.patch_size, config.eval.sequence_length, config.eval.batch_size
     )

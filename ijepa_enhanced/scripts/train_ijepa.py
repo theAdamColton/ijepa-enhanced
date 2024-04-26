@@ -196,6 +196,8 @@ def main(config: DictConfig):
 
     torch.set_float32_matmul_precision("medium")
 
+    hydra_output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+
     wandb.init(
         name="ijepa-enhanced",
         config=OmegaConf.to_container(config, resolve=True),
@@ -260,6 +262,10 @@ def main(config: DictConfig):
         vit, predictor, teacher, lfq, optimizer
     )
 
+    if config.train.resume_path:
+        print("loading state from ", config.train.resume_path)
+        accelerator.load_state(config.train.resume_path)
+
     step = 0
 
     dataloader = iter(dataloader)
@@ -304,9 +310,12 @@ def main(config: DictConfig):
                 accuracy = eval_classification_probe(
                     vit, lfq, copy.deepcopy(predictor), config, None, accelerator
                 )
-                wandb.log({"eval": {"accuracy": accuracy}})
+                wandb.log({"eval": {"accuracy": accuracy}}, step=step)
                 vit.train()
                 predictor.train()
+
+            if (step + 1) % config.train.save_every_num_steps == 0:
+                accelerator.save_state(hydra_output_dir + f"/checkpoint-{step:08}")
 
             if step > config.train.max_steps:
                 break

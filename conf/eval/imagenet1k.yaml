@@ -3,7 +3,7 @@ dataset:
   image_column_name: jpg
   num_classes: 1000
   max_res: ${...train.dataset.max_res}
-  max_rows: 5000
+  max_rows: 20000
   handler: warn_and_continue
 
 max_iterations: 80

@@ -15,8 +15,12 @@ commit_loss_weight: 2e-5
 entropy_loss_weight: 1e0
 entropy_sample_minimization_weight: 1e-5
 entropy_batch_maximization_weight: 1e-2
-eval_every_num_steps: 5000
+
+eval_every_num_steps: 100
 max_steps: 10001
+
+save_every_num_steps: 100
+resume_path: ""
 
 dataset:
   path: /hdd/imagenet1k/imagenet1k-train-{0000..1023}.tar
