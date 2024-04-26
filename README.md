@@ -42,3 +42,5 @@ ViTs can benifit from allowing the attention process to attend to nothing. This 
 * Test that attention mask works
 * Benchmark patchnpack and optimize
 * TOME
+* Make masked-mean its own simple pytorch library with dedicated testing, use chucks to do the sum -> divide pattern with less fp errors
+

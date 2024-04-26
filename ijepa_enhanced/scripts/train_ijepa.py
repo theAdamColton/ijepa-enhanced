@@ -198,7 +198,7 @@ def main(config: DictConfig):
 
     wandb.init(
         name="ijepa-enhanced",
-        config=config,
+        config=OmegaConf.to_container(config, resolve=True),
         mode=config.wandb_mode,
     )
 
@@ -246,8 +246,15 @@ def main(config: DictConfig):
         config.train.optimizer, list(vit.parameters()) + list(predictor.parameters())
     )
 
-    accelerator = accelerate.Accelerator()
+    accelerator = accelerate.Accelerator(
+        device_placement=False, **config.train.accelerator_args
+    )
     device = accelerator.device
+
+    vit = vit.to(device)
+    predictor = predictor.to(device)
+    teacher = teacher.to(device)
+    lfq = lfq.to(device)
 
     vit, predictor, teacher, lfq, optimizer = accelerator.prepare(
         vit, predictor, teacher, lfq, optimizer
@@ -260,50 +267,51 @@ def main(config: DictConfig):
     accuracy = -9999999
 
     for ctx, tgt in patchnpacker.make_iter(dataloader):
-        optimizer.zero_grad()
+        with accelerator.accumulate(vit, lfq, predictor):
+            optimizer.zero_grad()
 
-        loss_dict = compute_training_losses(
-            vit,
-            lfq,
-            teacher,
-            predictor,
-            accelerator,
-            ctx,
-            tgt,
-            patchnpacker,
-        )
-        del ctx, tgt
-
-        loss = (
-            config.train.commit_loss_weight * loss_dict["commit_loss"]
-            + config.train.entropy_loss_weight * loss_dict["entropy_loss"]
-            + loss_dict["prediction_loss"]
-        )
-
-        accelerator.backward(loss)
-        optimizer.step()
-
-        teacher.update()
-
-        loss_stmt = " ".join([f"{k}:{v.item():.5f}" for k, v in loss_dict.items()])
-
-        log.info(f"train loss: {loss.item():.5f} {loss_stmt} step {step}")
-        wandb.log({"train": loss_dict}, step=step)
-
-        del loss_dict
-
-        if (step + 1) % config.train.eval_every_num_steps == 0:
-            accuracy = eval_classification_probe(
-                vit, lfq, copy.deepcopy(predictor), config, None, accelerator
+            loss_dict = compute_training_losses(
+                vit,
+                lfq,
+                teacher,
+                predictor,
+                accelerator,
+                ctx,
+                tgt,
+                patchnpacker,
             )
-            wandb.log({"eval": {"accuracy": accuracy}})
-            vit.train()
-            predictor.train()
+            del ctx, tgt
 
-        if step > config.train.max_steps:
-            break
+            loss = (
+                config.train.commit_loss_weight * loss_dict["commit_loss"]
+                + config.train.entropy_loss_weight * loss_dict["entropy_loss"]
+                + loss_dict["prediction_loss"]
+            )
 
-        step += 1
+            accelerator.backward(loss)
+            optimizer.step()
+
+            teacher.update()
+
+            loss_stmt = " ".join([f"{k}:{v.item():.5f}" for k, v in loss_dict.items()])
+
+            log.info(f"train loss: {loss.item():.5f} {loss_stmt} step {step}")
+            wandb.log({"train": loss_dict}, step=step)
+
+            del loss_dict
+
+            if (step + 1) % config.train.eval_every_num_steps == 0:
+                accuracy = eval_classification_probe(
+                    vit, lfq, copy.deepcopy(predictor), config, None, accelerator
+                )
+                wandb.log({"eval": {"accuracy": accuracy}})
+                vit.train()
+                predictor.train()
+
+            if step > config.train.max_steps:
+                break
+
+            step += 1
 
     return -accuracy
 

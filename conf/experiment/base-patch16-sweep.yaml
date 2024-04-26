@@ -17,7 +17,7 @@ hydra:
       train.entropy_sample_minimization_weight: tag(log, interval(1e-5, 10))
       train.entropy_batch_maximization_weight: tag(log, interval(1e-5, 1))
       train.ema.beta: tag(log, interval(0.9, 0.999))
-      train.optimizer.args.lr: tag(log,interval(1e-4, 1e-3))
+      train.optimizer.args.lr: tag(log,interval(1e-5, 1e-3))
       train.max_steps: 101
       train.eval_every_num_steps: 100
       model.lfq.temperature: tag(log, interval(1e-3, 1e0))

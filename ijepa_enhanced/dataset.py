@@ -1,11 +1,8 @@
 import random
-import einx
-import numpy as np
 import torch
 from torch import nn
 from torchvision import transforms
 import webdataset as wds
-import datasets
 
 
 class CropToMultipleOf(nn.Module):
@@ -87,6 +84,14 @@ class ToTorchRGB8:
         return row
 
 
+def get_handler(handler: str):
+    all_handers = set(s for s in dir(wds.handlers) if not s.startswith("_"))
+    if not handler in all_handers:
+        raise ValueError(f"{handler} not in {all_handers}")
+
+    return getattr(wds.handlers, handler)
+
+
 def get_dataset(
     path="mnist",  # hf dataset path or wds dataset path
     num_classes=None,
@@ -98,7 +103,7 @@ def get_dataset(
     max_res=None,
     min_res=None,
     seed=42,
-    handler=wds.handlers.reraise_exception,
+    handler="reraise_exception",  # or 'warn_and_continue'
 ):
     """
     returns a iterable, where each row of the iterable will have an accessible 'pixel_values',
@@ -113,6 +118,8 @@ def get_dataset(
             min_res = crop_to_resolution_multiple_of
     if min_res:
         print(f"  min res: {min_res}")
+
+    handler = get_handler(handler)
 
     ds = (
         wds.WebDataset(path)

@@ -6,9 +6,9 @@ defaults:
 
 
 seed: 42
-torch_compile: False
-wandb_mode: disabled # online
-num_workers: 4
+torch_compile: True
+wandb_mode: online
+num_workers: 2
 
 train:
   dataset:
