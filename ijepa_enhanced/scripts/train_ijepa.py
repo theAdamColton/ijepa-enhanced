@@ -1,6 +1,5 @@
-import copy
 import safetensors.torch
-from typing import Optional
+import copy
 import torch
 import torch.nn.functional as F
 import hydra
@@ -12,7 +11,6 @@ import wandb
 from tensorsequence import TensorSequence
 
 from ..vit import ViT
-from ..ema import EMA
 from ..teacher import Teacher
 from ..predictor import Predictor
 from ..lfq import calculate_perplexity, LFQ
@@ -223,10 +221,13 @@ def main(config: DictConfig):
     print_num_parameters(lfq)
 
     if config.torch_compile:
-        vit.forward = torch.compile(vit.forward)
-        teacher.forward = torch.compile(teacher.forward)
-        predictor.forward = torch.compile(predictor.forward)
-        lfq.forward = torch.compile(lfq.forward)
+        # vit.forward = torch.compile(vit.forward)
+        # teacher.forward = torch.compile(teacher.forward)
+        # predictor.forward = torch.compile(predictor.forward)
+        # lfq.forward = torch.compile(lfq.forward)
+        train_loss_fn = torch.compile(compute_training_losses)
+    else:
+        train_loss_fn = compute_training_losses
 
     dataset = get_dataset(**config.train.dataset)
 
@@ -248,9 +249,15 @@ def main(config: DictConfig):
         config.train.optimizer, list(vit.parameters()) + list(predictor.parameters())
     )
 
-    accelerator = accelerate.Accelerator(
-        device_placement=False, **config.train.accelerator_args
+    project_configuration = accelerate.accelerator.ProjectConfiguration(
+        project_dir=hydra_output_dir, **config.train.accelerator_project_configuration
     )
+    accelerator = accelerate.Accelerator(
+        device_placement=False,
+        project_config=project_configuration,
+        **config.train.accelerator_args,
+    )
+
     device = accelerator.device
 
     vit = vit.to(device)
@@ -262,7 +269,7 @@ def main(config: DictConfig):
         vit, predictor, teacher, lfq, optimizer
     )
 
-    if config.train.resume_path:
+    if config.train.accelerator_resume_path:
         print("loading state from ", config.train.resume_path)
         accelerator.load_state(config.train.resume_path)
 
@@ -276,7 +283,9 @@ def main(config: DictConfig):
         with accelerator.accumulate(vit, lfq, predictor):
             optimizer.zero_grad()
 
-            loss_dict = compute_training_losses(
+            ctx.to_device(device)
+            tgt.to_device(device)
+            loss_dict = train_loss_fn(
                 vit,
                 lfq,
                 teacher,
@@ -315,7 +324,7 @@ def main(config: DictConfig):
                 predictor.train()
 
             if (step + 1) % config.train.save_every_num_steps == 0:
-                accelerator.save_state(hydra_output_dir + f"/checkpoint-{step:08}")
+                accelerator.save_state(hydra_output_dir + "/checkpoint/")
 
             if step > config.train.max_steps:
                 break

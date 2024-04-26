@@ -1,11 +1,18 @@
 defaults:
   - optimizer: adamw
 batch_size: 192
+
+resume_checkpoint: ""
+
 accelerator_args:
   mixed_precision: "fp16"
   gradient_accumulation_steps: 1
+accelerator_resume_path: ""
+save_every_num_steps: 100
+accelerator_project_configuration:
+  total_limit: 10
+
 gradient_checkpoint: True
-resume_checkpoint: ""
 ema:
   beta: 0.96
 sequence_length_context: 256
@@ -18,9 +25,6 @@ entropy_batch_maximization_weight: 1e-2
 
 eval_every_num_steps: 100
 max_steps: 10001
-
-save_every_num_steps: 100
-resume_path: ""
 
 dataset:
   path: /hdd/imagenet1k/imagenet1k-train-{0000..1023}.tar
