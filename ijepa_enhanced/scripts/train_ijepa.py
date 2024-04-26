@@ -190,8 +190,6 @@ def compute_training_losses(
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="conf")
 def main(config: DictConfig):
-    log.info(OmegaConf.to_yaml(config))
-
     torch.set_float32_matmul_precision("medium")
 
     hydra_output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
@@ -221,13 +219,10 @@ def main(config: DictConfig):
     print_num_parameters(lfq)
 
     if config.torch_compile:
-        # vit.forward = torch.compile(vit.forward)
-        # teacher.forward = torch.compile(teacher.forward)
-        # predictor.forward = torch.compile(predictor.forward)
-        # lfq.forward = torch.compile(lfq.forward)
-        train_loss_fn = torch.compile(compute_training_losses)
-    else:
-        train_loss_fn = compute_training_losses
+        vit.forward = torch.compile(vit.forward)
+        teacher.forward = torch.compile(teacher.forward)
+        predictor.forward = torch.compile(predictor.forward)
+        lfq.forward = torch.compile(lfq.forward)
 
     dataset = get_dataset(**config.train.dataset)
 
@@ -285,7 +280,7 @@ def main(config: DictConfig):
 
             ctx.to_device(device)
             tgt.to_device(device)
-            loss_dict = train_loss_fn(
+            loss_dict = compute_training_losses(
                 vit,
                 lfq,
                 teacher,

@@ -9,18 +9,17 @@ hydra:
     direction: minimize
     study_name: base-patch16
     storage: null
-    n_trials: 30
+    n_trials: 10
     n_jobs: 1
     max_failure_rate: 0.0
     params:
-      train.commit_loss_weight: tag(log, interval(1e-7, 1e-5))
-      train.entropy_sample_minimization_weight: tag(log, interval(1e-9, 1e-4))
-      train.entropy_batch_maximization_weight: tag(log, interval(1e-5, 1e-2))
+      train.commit_loss_weight: tag(log, interval(1e-7, 1e-3))
+      train.entropy_sample_minimization_weight: tag(log, interval(1e-9, 1e-1))
+      train.entropy_batch_maximization_weight: tag(log, interval(1e-3, 1e-1))
       train.ema.beta: tag(log, interval(0.95, 0.999))
       train.optimizer.args.lr: tag(log,interval(5e-5, 5e-4))
-      train.max_steps: 201
-      train.eval_every_num_steps: 200
-      train.batch_size: 64
+      train.max_steps: 101
+      train.eval_every_num_steps: 100
       model.lfq.temperature: tag(log, interval(1e-3, 1e-1))
       eval.max_iterations: 100
       train.save_every_num_steps: 10000

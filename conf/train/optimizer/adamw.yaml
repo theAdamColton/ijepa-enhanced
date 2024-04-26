@@ -1,6 +1,6 @@
 name: AdamW
 args:
-  lr: 1e-4
+  lr: 2e-4
   weight_decay: 0.05
   betas: 
     - 0.9

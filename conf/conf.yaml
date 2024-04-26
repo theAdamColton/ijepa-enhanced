@@ -6,7 +6,7 @@ defaults:
 
 
 seed: 42
-torch_compile: True
+torch_compile: False
 wandb_mode: online
 num_workers: 2
 
