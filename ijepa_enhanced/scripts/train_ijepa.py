@@ -202,14 +202,14 @@ def main(config: DictConfig):
     )
 
     vit = ViT(**config.model.vit)
-    # safetensors.torch.load_model(
-    #     vit, "./pretrained-models/vit-base-patch16.safetensors"
-    # )
+    safetensors.torch.load_model(
+        vit, "./pretrained-models/vit-base-patch16.safetensors"
+    )
     lfq = LFQ(**config.model.lfq)
     predictor = Predictor(**config.model.predictor)
-    # safetensors.torch.load_model(
-    #     predictor, "./pretrained-models/predictor-base.safetensors"
-    # )
+    safetensors.torch.load_model(
+        predictor, "./pretrained-models/predictor-small.safetensors"
+    )
 
     teacher = Teacher(vit, lfq, **config.train.ema)
     print("vit: ", end="")
@@ -308,8 +308,6 @@ def main(config: DictConfig):
                     teacher,
                     copy.deepcopy(predictor),
                     config,
-                    None,
-                    accelerator,
                     patch_size=vit.patch_size,
                 )
                 wandb.log({"eval": {"accuracy": accuracy}}, step=step)

@@ -6,9 +6,9 @@ dataset:
   max_rows: 20000
   handler: warn_and_continue
 
-max_iterations: 150
-batch_size: 32
-batch_size_validation: 128
+max_iterations: 80
+batch_size: 256
+batch_size_validation: 256
 optimizer:
   name: AdamW
   args:

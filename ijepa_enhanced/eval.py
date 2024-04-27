@@ -64,23 +64,24 @@ def eval_classification_probe(
     teacher,
     predictor,
     config,
-    predictor_head=None,
-    accelerator=None,
     patch_size=None,
 ):
-    if accelerator is None:
-        accelerator = accelerate.Accelerator()
+    project_configuration = accelerate.accelerator.ProjectConfiguration(
+        **config.train.accelerator_project_configuration
+    )
+    accelerator = accelerate.Accelerator(
+        project_config=project_configuration,
+        **config.train.accelerator_args,
+    )
 
     device = accelerator.device
 
-    predictor = predictor.train()
-    if predictor_head is None:
-        predictor_head = torch.nn.Linear(
-            predictor.projection_dim * predictor.projection_heads,
-            config.eval.dataset.num_classes,
-            bias=False,
-            device=device,
-        )
+    predictor_head = torch.nn.Linear(
+        predictor.projection_dim * predictor.projection_heads,
+        config.eval.dataset.num_classes,
+        bias=False,
+        device=device,
+    )
 
     patchnpacker = PatchNPacker(
         patch_size, config.eval.sequence_length, config.eval.batch_size
@@ -102,8 +103,8 @@ def eval_classification_probe(
     )
     dataloader = iter(dataloader)
 
-    predictor, predictor_head, optimizer, scheduler = accelerator.prepare(
-        predictor, predictor_head, optimizer, scheduler
+    predictor_head, optimizer, scheduler = accelerator.prepare(
+        predictor_head, optimizer, scheduler
     )
 
     step = 0
@@ -171,7 +172,7 @@ def eval_classification_probe(
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
-    accuracy = ((all_preds == all_labels) * 1.0).mean()
+    accuracy = ((all_preds == all_labels) * 1.0).mean().item()
 
     log.info(f"accuracy:{accuracy}")
 

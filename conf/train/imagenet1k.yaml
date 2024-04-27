@@ -1,6 +1,6 @@
 defaults:
   - optimizer: adamw
-batch_size: 192
+batch_size: 256
 
 resume_checkpoint: ""
 
@@ -20,10 +20,10 @@ sequence_length_target: 768
 sequence_length_prediction: 768
 commit_loss_weight: 2e-5
 entropy_loss_weight: 1e0
-entropy_sample_minimization_weight: 1e-5
-entropy_batch_maximization_weight: 1e-2
+entropy_sample_minimization_weight: 1e-7
+entropy_batch_maximization_weight: 1e-1
 
-eval_every_num_steps: 100
+eval_every_num_steps: 200
 max_steps: 10001
 
 dataset:
