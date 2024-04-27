@@ -1,8 +1,8 @@
 name: lfq-base
 dim: ${..vit.hidden_size}
 codebook_size: 256
-num_codebooks: 8
+num_codebooks: 16
 sample_minimization_weight: ${...train.entropy_sample_minimization_weight}
 batch_maximization_weight: ${...train.entropy_batch_maximization_weight}
-temperature: 0.15
+temperature: 0.1
 eps: 1e-9

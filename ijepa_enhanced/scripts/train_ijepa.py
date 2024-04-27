@@ -1,3 +1,4 @@
+import gc
 import safetensors.torch
 import copy
 import torch
@@ -218,12 +219,6 @@ def main(config: DictConfig):
     print("lfq: ", end="")
     print_num_parameters(lfq)
 
-    if config.torch_compile:
-        vit.forward = torch.compile(vit.forward)
-        teacher.forward = torch.compile(teacher.forward)
-        predictor.forward = torch.compile(predictor.forward)
-        lfq.forward = torch.compile(lfq.forward)
-
     dataset = get_dataset(**config.train.dataset)
 
     dataloader = DataLoader(
@@ -265,8 +260,8 @@ def main(config: DictConfig):
     )
 
     if config.train.accelerator_resume_path:
-        print("loading state from ", config.train.resume_path)
-        accelerator.load_state(config.train.resume_path)
+        print("loading state from ", config.train.accelerator_resume_path)
+        accelerator.load_state(config.train.accelerator_resume_path)
 
     step = 0
 
@@ -278,8 +273,6 @@ def main(config: DictConfig):
         with accelerator.accumulate(vit, lfq, predictor):
             optimizer.zero_grad()
 
-            ctx.to_device(device)
-            tgt.to_device(device)
             loss_dict = compute_training_losses(
                 vit,
                 lfq,
@@ -312,7 +305,12 @@ def main(config: DictConfig):
 
             if (step + 1) % config.train.eval_every_num_steps == 0:
                 accuracy = eval_classification_probe(
-                    vit, lfq, copy.deepcopy(predictor), config, None, accelerator
+                    teacher,
+                    copy.deepcopy(predictor),
+                    config,
+                    None,
+                    accelerator,
+                    patch_size=vit.patch_size,
                 )
                 wandb.log({"eval": {"accuracy": accuracy}}, step=step)
                 vit.train()
@@ -325,6 +323,9 @@ def main(config: DictConfig):
                 break
 
             step += 1
+
+            gc.collect()
+            torch.cuda.empty_cache()
 
     return -accuracy
 

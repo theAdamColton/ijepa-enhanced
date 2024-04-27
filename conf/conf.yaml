@@ -6,7 +6,6 @@ defaults:
 
 
 seed: 42
-torch_compile: False
 wandb_mode: online
 num_workers: 2
 
@@ -17,10 +16,8 @@ train:
 
 eval:
   batch_size: ${train.batch_size}
-  batch_size_validation: ${train.batch_size_validation}
   num_workers: ${num_workers}
   sequence_length: ${train.sequence_length_target}
-  torch_compile: ${..torch_compile}
 
   dataset:
     crop_to_resolution_multiple_of: ${model.vit.patch_size}
@@ -28,3 +25,12 @@ eval:
 
 
 pretrained_model_path: pretrained-models
+
+model:
+  predictor:
+    projection_dim: ${model.lfq.codebook_size}
+    projection_heads: ${model.lfq.num_codebooks}
+    gradient_checkpoint: ${train.gradient_checkpoint}
+    input_size: ${model.vit.hidden_size}
+  vit:
+    gradient_checkpoint: ${train.gradient_checkpoint}

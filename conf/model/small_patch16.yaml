@@ -1,0 +1,5 @@
+defaults:
+  - vit: small_patch16
+  - predictor: small
+  - lfq: base
+

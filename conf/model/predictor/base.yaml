@@ -1,9 +1,5 @@
 name: predictor-base
 hidden_size: 384
-input_size: ${..vit.hidden_size}
 intermediate_size: 1536
 num_attention_heads: 12
 num_hidden_layers: 6
-projection_dim: ${..lfq.codebook_size}
-projection_heads: ${..lfq.num_codebooks}
-gradient_checkpoint: ${...train.gradient_checkpoint}

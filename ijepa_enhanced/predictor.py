@@ -59,17 +59,15 @@ class Predictor(nn.Module):
 
         # No patch information is permitted from the states to be predicted
         # They are still allowed to be attended to
-        x = einx.multiply("b s z, b s -> b s z", x, ~tgt_mask)
-
-        # TODO! should position information be given for tokens that are not being predicted?
-        # yes
-        x = x + self.pos_emb(position_ids)
-
         # Add a special conditioning token for tokens that are the prediction target
-        x = x + einx.multiply(
-            "b s, z -> b s z",
-            tgt_mask,
-            self.is_prediction_token,
+        x = (
+            einx.multiply("b s z, b s -> b s z", x, ~tgt_mask)
+            + einx.multiply(
+                "b s, z -> b s z",
+                tgt_mask,
+                self.is_prediction_token,
+            )
+            + self.pos_emb(position_ids)
         )
 
         x = self.transformer(x, attention_mask)

@@ -13,7 +13,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def make_pred(ctx, vit, lfq, predictor, predictor_head, accelerator):
+def make_pred(ctx, teacher, predictor, predictor_head, accelerator):
     ctx_patches = ctx["patches"]
     ctx_positions = ctx["positions"]
     ctx_image_ids = ctx["image_ids"]
@@ -24,8 +24,8 @@ def make_pred(ctx, vit, lfq, predictor, predictor_head, accelerator):
 
     with torch.no_grad():
         with accelerator.autocast():
-            hidden_states = vit(ctx_patches, ctx_attn_mask, ctx_positions)
-            hidden_states = lfq(hidden_states, return_dict=True)["hidden_states"]
+            x = teacher.vit(ctx_patches, ctx_attn_mask, ctx_positions)
+            hidden_states = teacher.lfq(x, return_dict=True)["hidden_states"]
 
     with accelerator.autocast():
         tgt_mask = torch.zeros_like(ctx_attn_mask[:, 0])
@@ -61,19 +61,18 @@ def make_pred(ctx, vit, lfq, predictor, predictor_head, accelerator):
 
 
 def eval_classification_probe(
-    vit,
-    lfq,
+    teacher,
     predictor,
     config,
     predictor_head=None,
     accelerator=None,
+    patch_size=None,
 ):
     if accelerator is None:
         accelerator = accelerate.Accelerator()
 
     device = accelerator.device
 
-    vit = vit.eval()
     predictor = predictor.train()
     if predictor_head is None:
         predictor_head = torch.nn.Linear(
@@ -84,11 +83,14 @@ def eval_classification_probe(
         )
 
     patchnpacker = PatchNPacker(
-        vit.patch_size, config.eval.sequence_length, config.eval.batch_size
+        patch_size, config.eval.sequence_length, config.eval.batch_size
     )
     optimizer = get_optimizer(
         config.eval.optimizer,
         list(predictor.parameters()) + list(predictor_head.parameters()),
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, config.eval.max_iterations, 1e-7
     )
 
     train_dataset = get_dataset(**config.train.dataset)
@@ -100,24 +102,24 @@ def eval_classification_probe(
     )
     dataloader = iter(dataloader)
 
-    vit, predictor, lfq, predictor_head, optimizer = accelerator.prepare(
-        vit, predictor, lfq, predictor_head, optimizer
+    predictor, predictor_head, optimizer, scheduler = accelerator.prepare(
+        predictor, predictor_head, optimizer, scheduler
     )
 
     step = 0
-    _id = 1
 
     for ctx in patchnpacker.make_iter(dataloader):
         ctx.to_device(accelerator.device)
 
         loss, logits, labels = make_pred(
-            ctx, vit, lfq, predictor, predictor_head, accelerator
+            ctx, teacher, predictor, predictor_head, accelerator
         )
 
         log.info(f"eval loss {loss:.4f} step {step}")
 
         accelerator.backward(loss)
         optimizer.step()
+        scheduler.step()
         optimizer.zero_grad()
 
         step += 1
@@ -126,7 +128,9 @@ def eval_classification_probe(
             break
 
     patchnpacker = PatchNPacker(
-        vit.patch_size, config.eval.sequence_length, config.eval.batch_size_validation
+        patch_size,
+        config.eval.sequence_length,
+        config.eval.batch_size_validation,
     )
 
     validation_dataset = get_dataset(**config.eval.dataset)
@@ -153,7 +157,7 @@ def eval_classification_probe(
 
         with torch.inference_mode():
             loss, logits, labels = make_pred(
-                ctx, vit, lfq, predictor, predictor_head, accelerator
+                ctx, teacher, predictor, predictor_head, accelerator
             )
 
         preds = logits.argmax(-1)

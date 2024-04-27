@@ -8,10 +8,10 @@ class Teacher(nn.Module):
         self.vit = EMA(vit, beta=beta)
         self.lfq = EMA(lfq, beta=beta)
 
-    def forward(self, *args, **kwargs):
-        x = self.vit(*args, **kwargs)
-        indices = self.lfq(x, return_dict=True, return_indices=True)["indices"]
-        return indices, x
+    def forward(self, x, attention_mask, position_indices):
+        x = self.vit(x, attention_mask, position_indices)
+        lfq_result = self.lfq(x, return_dict=True, return_indices=True)
+        return lfq_result["indices"], lfq_result["hidden_states"]
 
     def update(self):
         self.vit.update()
