@@ -21,6 +21,7 @@ class EMA(nn.Module):
         self.ema_model = deepcopy(model).eval()
         self.ema_model.requires_grad_(False)
 
+    @torch.no_grad()
     def update(self):
         model = self.model[0]
         ema_model = self.ema_model

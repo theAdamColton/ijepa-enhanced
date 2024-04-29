@@ -12,7 +12,7 @@ batch_size_validation: 256
 optimizer:
   name: AdamW
   args:
-    lr: 2e-4
+    lr: 5e-5
     weight_decay: 5e-2
     betas:
       - 0.9

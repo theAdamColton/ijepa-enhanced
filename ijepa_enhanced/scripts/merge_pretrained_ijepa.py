@@ -14,16 +14,12 @@ from ..predictor import Predictor
 
 def copy_in_coerce_(tgt: torch.Tensor, src: torch.Tensor):
     assert tgt.ndim == src.ndim
-    if tgt.shape != src.shape:
-        new_shape = []
-        for i in range(src.ndim):
-            assert tgt.shape[i] <= src.shape[i]
+    new_shape = []
+    for i in range(src.ndim):
+        stop = min(tgt.shape[i], src.shape[i])
+        new_shape.append(slice(stop))
 
-            new_shape.append(slice(tgt.shape[i]))
-
-        src = src[new_shape]
-
-    tgt.copy_(src)
+    tgt[new_shape].copy_(src[new_shape])
 
 
 def filter_remove_prefix(d, pre):

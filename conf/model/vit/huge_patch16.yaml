@@ -1,0 +1,9 @@
+name: vit-huge-patch-16
+hidden_size: 1280
+intermediate_size: 5120
+num_attention_heads: 16
+num_hidden_layers: 32
+patch_size: 16
+max_height: 16
+max_width: 16
+

@@ -37,3 +37,8 @@ model:
     input_size: ${model.vit.hidden_size}
   vit:
     gradient_checkpoint: ${train.gradient_checkpoint}
+  lfq:
+    dim: ${model.vit.hidden_size}
+    sample_minimization_weight: ${train.entropy_sample_minimization_weight}
+    batch_maximization_weight: ${train.entropy_batch_maximization_weight}
+

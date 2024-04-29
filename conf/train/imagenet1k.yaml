@@ -35,3 +35,5 @@ dataset:
   max_res: 256
   handler: warn_and_continue
 
+
+load_pretrained_model: True

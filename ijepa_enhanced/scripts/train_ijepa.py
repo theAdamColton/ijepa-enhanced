@@ -7,7 +7,6 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import accelerate
 from torch.utils.data import DataLoader
-import wandb
 
 from tensorsequence import TensorSequence
 
@@ -24,10 +23,6 @@ from ..eval import eval_classification_probe
 from ..utils import print_num_parameters
 from ..dataset import get_dataset
 from ..optimizer import get_optimizer
-
-import logging
-
-log = logging.getLogger(__name__)
 
 
 def compute_target_states(teacher: Teacher, tgt: TensorSequence, accelerator):
@@ -189,29 +184,48 @@ def compute_training_losses(
     }
 
 
+def optimizer_to(optim, device):
+    for param in optim.state.values():
+        # Not sure there are any global tensors in the state dict
+        if isinstance(param, torch.Tensor):
+            param.data = param.data.to(device)
+            if param._grad is not None:
+                param._grad.data = param._grad.data.to(device)
+        elif isinstance(param, dict):
+            for subparam in param.values():
+                if isinstance(subparam, torch.Tensor):
+                    subparam.data = subparam.data.to(device)
+                    if subparam._grad is not None:
+                        subparam._grad.data = subparam._grad.data.to(device)
+
+
+def load_models(config):
+    vit = ViT(**config.model.vit)
+    lfq = LFQ(**config.model.lfq)
+    predictor = Predictor(**config.model.predictor)
+    teacher = Teacher(vit, lfq, **config.train.ema)
+    optimizer = get_optimizer(
+        config.train.optimizer, list(vit.parameters()) + list(predictor.parameters())
+    )
+    return vit, lfq, predictor, teacher, optimizer
+
+
 @hydra.main(version_base=None, config_path="../../conf", config_name="conf")
 def main(config: DictConfig):
     torch.set_float32_matmul_precision("medium")
 
     hydra_output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
 
-    wandb.init(
-        name="ijepa-enhanced",
-        config=OmegaConf.to_container(config, resolve=True),
-        mode=config.wandb_mode,
-    )
+    vit, lfq, predictor, teacher, optimizer = load_models(config)
 
-    vit = ViT(**config.model.vit)
-    safetensors.torch.load_model(
-        vit, "./pretrained-models/vit-base-patch16.safetensors"
-    )
-    lfq = LFQ(**config.model.lfq)
-    predictor = Predictor(**config.model.predictor)
-    safetensors.torch.load_model(
-        predictor, "./pretrained-models/predictor-small.safetensors"
-    )
+    if config.train.load_pretrained_model:
+        safetensors.torch.load_model(
+            vit, f"./pretrained-models/{config.model.vit.name}.safetensors"
+        )
+        safetensors.torch.load_model(
+            predictor, f"./pretrained-models/{config.model.predictor.name}.safetensors"
+        )
 
-    teacher = Teacher(vit, lfq, **config.train.ema)
     print("vit: ", end="")
     print_num_parameters(vit)
     print("predictor: ", end="")
@@ -236,37 +250,38 @@ def main(config: DictConfig):
         num_prediction_targets=config.train.num_prediction_targets,
     )
 
-    optimizer = get_optimizer(
-        config.train.optimizer, list(vit.parameters()) + list(predictor.parameters())
-    )
-
     project_configuration = accelerate.accelerator.ProjectConfiguration(
-        project_dir=hydra_output_dir, **config.train.accelerator_project_configuration
+        project_dir=hydra_output_dir,
+        automatic_checkpoint_naming=True,
+        **config.train.accelerator_project_configuration,
     )
     accelerator = accelerate.Accelerator(
         device_placement=False,
         project_config=project_configuration,
+        log_with="wandb",
         **config.train.accelerator_args,
+    )
+
+    accelerator.init_trackers(
+        project_name="ijepa-enhanced",
+        config=OmegaConf.to_container(config, resolve=True),
     )
 
     device = accelerator.device
 
+    vit, predictor, teacher, lfq, optimizer, dataloader = accelerator.prepare(
+        vit, predictor, teacher, lfq, optimizer, dataloader
+    )
     vit = vit.to(device)
     predictor = predictor.to(device)
-    teacher = teacher.to(device)
+    teacher = teacher.to(device).eval()
     lfq = lfq.to(device)
-
-    vit, predictor, teacher, lfq, optimizer = accelerator.prepare(
-        vit, predictor, teacher, lfq, optimizer
-    )
 
     if config.train.accelerator_resume_path:
         print("loading state from ", config.train.accelerator_resume_path)
         accelerator.load_state(config.train.accelerator_resume_path)
 
     step = 0
-
-    dataloader = iter(dataloader)
 
     accuracy = -9999999
 
@@ -299,27 +314,56 @@ def main(config: DictConfig):
 
             loss_stmt = " ".join([f"{k}:{v.item():.5f}" for k, v in loss_dict.items()])
 
-            log.info(f"train loss: {loss.item():.5f} {loss_stmt} step {step}")
-            wandb.log({"train": loss_dict}, step=step)
+            accelerator.print(f"train loss: {loss.item():.5f} {loss_stmt} step {step}")
+            accelerator.log({"train": loss_dict}, step=step)
 
-            del loss_dict
+            del loss_dict, loss
 
             if (step + 1) % config.train.eval_every_num_steps == 0:
-                accuracy = eval_classification_probe(
-                    teacher,
-                    copy.deepcopy(predictor),
-                    config,
-                    patch_size=vit.patch_size,
-                )
+                # unload models to CPU
+                # and clear accelerator state
+                eval_predictor = predictor
+                predictor = copy.deepcopy(predictor)
+                accelerator.clear()
+                vit.to("cpu")
+                lfq.to("cpu")
+                optimizer_to(optimizer, "cpu")
+                predictor.to("cpu")
 
                 gc.collect()
                 torch.cuda.empty_cache()
 
-                wandb.log({"eval": {"accuracy": accuracy}}, step=step)
-                vit.train()
-                predictor.train()
+                # Run evaluation
 
-            if (step + 1) % config.train.save_every_num_steps == 0:
+                accuracy = eval_classification_probe(
+                    teacher,
+                    eval_predictor,
+                    config,
+                    accelerator,
+                    config.model.vit.patch_size,
+                )
+                accelerator.log({"eval": {"accuracy": accuracy}}, step=step)
+                accelerator.clear()
+                del eval_predictor
+                gc.collect()
+                torch.cuda.empty_cache()
+
+                vit, predictor, teacher, lfq, optimizer, dataloader = (
+                    accelerator.prepare(
+                        vit, predictor, teacher, lfq, optimizer, dataloader
+                    )
+                )
+                vit = vit.to(device)
+                predictor = predictor.to(device)
+                teacher = teacher.to(device).eval()
+                lfq = lfq.to(device)
+                optimizer_to(optimizer, device)
+
+            if (
+                (step + 1) % config.train.save_every_num_steps == 0
+                and accelerator.is_main_process
+            ):
+                accelerator.wait_for_everyone()
                 accelerator.save_state(hydra_output_dir + "/checkpoint/")
 
             if step > config.train.max_steps:

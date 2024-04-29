@@ -8,10 +8,6 @@ from .dataset import get_dataset
 from .patchnpack import MASK_IMAGE_ID, PatchNPacker, get_attention_mask
 from .optimizer import get_optimizer
 
-import logging
-
-log = logging.getLogger(__name__)
-
 
 def make_pred(ctx, teacher, predictor, predictor_head, accelerator):
     ctx_patches = ctx["patches"]
@@ -24,14 +20,11 @@ def make_pred(ctx, teacher, predictor, predictor_head, accelerator):
 
     with torch.no_grad():
         with accelerator.autocast():
-            x = teacher.vit(ctx_patches, ctx_attn_mask, ctx_positions)
-            hidden_states = teacher.lfq(x, return_dict=True)["hidden_states"]
+            _, hidden_states = teacher(ctx_patches, ctx_attn_mask, ctx_positions)
 
+    tgt_mask = torch.zeros_like(ctx_attn_mask[:, 0])
     with accelerator.autocast():
-        tgt_mask = torch.zeros_like(ctx_attn_mask[:, 0])
-        tgt_hidden_states = predictor(
-            hidden_states, ctx_attn_mask, tgt_mask, ctx_positions
-        )
+        hidden_states = predictor(hidden_states, ctx_attn_mask, tgt_mask, ctx_positions)
 
     # combines the features at each unique id by taking the mean
     all_hidden_states = []
@@ -40,7 +33,7 @@ def make_pred(ctx, teacher, predictor, predictor_head, accelerator):
         if id == MASK_IMAGE_ID:
             continue
         mask = ctx_image_ids == id
-        hidden_states = tgt_hidden_states[mask].mean(0)
+        hidden_states = hidden_states[mask].mean(0)
 
         label = ctx_labels[mask][0]
         all_labels.append(label)
@@ -64,16 +57,13 @@ def eval_classification_probe(
     teacher,
     predictor,
     config,
+    accelerator: accelerate.Accelerator,
     patch_size=None,
 ):
-    project_configuration = accelerate.accelerator.ProjectConfiguration(
-        **config.train.accelerator_project_configuration
-    )
-    accelerator = accelerate.Accelerator(
-        project_config=project_configuration,
-        **config.train.accelerator_args,
-    )
-
+    """
+    teacher: already prepared by accelerator
+    predictor: already prepared by accelerator
+    """
     device = accelerator.device
 
     predictor_head = torch.nn.Linear(
@@ -86,10 +76,12 @@ def eval_classification_probe(
     patchnpacker = PatchNPacker(
         patch_size, config.eval.sequence_length, config.eval.batch_size
     )
+
     optimizer = get_optimizer(
         config.eval.optimizer,
         list(predictor.parameters()) + list(predictor_head.parameters()),
     )
+
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, config.eval.max_iterations, 1e-7
     )
@@ -101,10 +93,9 @@ def eval_classification_probe(
         collate_fn=None,
         batch_size=None,
     )
-    dataloader = iter(dataloader)
 
-    predictor_head, optimizer, scheduler = accelerator.prepare(
-        predictor_head, optimizer, scheduler
+    predictor_head, optimizer, scheduler, dataloader = accelerator.prepare(
+        predictor_head, optimizer, scheduler, dataloader
     )
 
     step = 0
@@ -116,7 +107,7 @@ def eval_classification_probe(
             ctx, teacher, predictor, predictor_head, accelerator
         )
 
-        log.info(f"eval loss {loss:.4f} step {step}")
+        accelerator.print(f"eval loss {loss:.4f} step {step}")
 
         accelerator.backward(loss)
         optimizer.step()
@@ -141,7 +132,8 @@ def eval_classification_probe(
         collate_fn=None,
         batch_size=None,
     )
-    dataloader = iter(dataloader)
+
+    dataloader = accelerator.prepare(dataloader)
 
     all_preds = []
     all_labels = []
@@ -151,7 +143,11 @@ def eval_classification_probe(
     except:
         n = None
 
-    progress_bar = tqdm(desc="validation", total=n)
+    progress_bar = tqdm(
+        desc="validation", total=n, disable=not accelerator.is_local_main_process
+    )
+
+    PAD_ID = -200
 
     for ctx in patchnpacker.make_iter(dataloader):
         ctx.to_device(device)
@@ -163,6 +159,9 @@ def eval_classification_probe(
 
         preds = logits.argmax(-1)
 
+        preds, labels = accelerator.pad_across_processes((preds, labels), 0, PAD_ID)
+        preds, labels = accelerator.gather_for_metrics((preds, labels))
+
         all_preds.append(preds.cpu())
         all_labels.append(labels.cpu())
 
@@ -172,8 +171,10 @@ def eval_classification_probe(
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
+    all_preds = all_preds[all_preds != PAD_ID]
+    all_labels = all_labels[all_labels != PAD_ID]
     accuracy = ((all_preds == all_labels) * 1.0).mean().item()
 
-    log.info(f"accuracy:{accuracy}")
+    accelerator.print(f"accuracy:{accuracy}")
 
     return accuracy

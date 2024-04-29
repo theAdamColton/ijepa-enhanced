@@ -1,0 +1,5 @@
+defaults:
+  - vit: huge_patch16
+  - predictor: huge
+  - lfq: huge
+

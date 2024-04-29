@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+  - override /model: huge_patch16
+
+eval:
+  batch_size: 32
+  batch_size_validation: 128
+
+train:
+  batch_size: 4
+  entropy_sample_minimization_weight: 1e-5
+  entropy_batch_maximization_weight: 1e-2
+
+
+
