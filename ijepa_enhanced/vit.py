@@ -54,6 +54,7 @@ class ViT(nn.Module):
         max_width: int = 64,
         gradient_checkpoint=False,
         name="",
+        use_bias=True,
     ):
         super().__init__()
 
@@ -63,19 +64,22 @@ class ViT(nn.Module):
 
         self.to_patch_embedding = nn.Sequential(
             nn.LayerNorm(patch_dim),
-            nn.Linear(patch_dim, hidden_size, bias=False),
+            nn.Linear(patch_dim, hidden_size, bias=use_bias),
         )
 
         self.pos_emb = PositionalEmbeddings(hidden_size, max_height, max_width)
 
-        self.model = Transformer(
+        self.transformer = Transformer(
             hidden_size,
             num_hidden_layers,
             num_attention_heads,
             dim_head,
             intermediate_size,
             gradient_checkpoint=gradient_checkpoint,
+            use_bias=use_bias,
         )
+
+        self.norm = nn.LayerNorm(hidden_size)
 
     def forward(
         self,
@@ -93,5 +97,6 @@ class ViT(nn.Module):
 
         x = self.to_patch_embedding(x)
         x = x + self.pos_emb(position_indices)
-        x = self.model(x, attention_mask)
+        x = self.transformer(x, attention_mask)
+        x = self.norm(x)
         return x

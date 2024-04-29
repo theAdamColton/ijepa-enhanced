@@ -19,17 +19,14 @@ class Predictor(nn.Module):
         max_height=64,
         max_width=64,
         gradient_checkpoint=False,
+        use_bias=True,
         name="",
     ):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.proj_in = nn.Sequential(
-            nn.LayerNorm(input_size),
-            nn.Linear(input_size, hidden_size, bias=False),
-            nn.LayerNorm(hidden_size),
-        )
-        self.is_prediction_token = nn.Parameter(torch.randn(hidden_size))
+        self.proj_in = nn.Linear(input_size, hidden_size, bias=use_bias)
+        self.is_prediction_token = nn.Parameter(torch.zeros(hidden_size))
         self.pos_emb = PositionalEmbeddings(hidden_size, max_height, max_width)
         self.transformer = Transformer(
             hidden_size,
@@ -38,10 +35,11 @@ class Predictor(nn.Module):
             hidden_size // num_attention_heads,
             intermediate_size,
             gradient_checkpoint=gradient_checkpoint,
+            use_bias=use_bias,
         )
         self.norm = nn.LayerNorm(self.hidden_size)
         self.pred_head = nn.Linear(
-            hidden_size, projection_dim * projection_heads, bias=False
+            hidden_size, projection_dim * projection_heads, bias=use_bias
         )
         self.projection_dim = projection_dim
         self.projection_heads = projection_heads

@@ -228,11 +228,12 @@ def main(config: DictConfig):
     )
 
     patchnpacker = ContextTargetPatchNPacker(
-        patch_size=config.model.vit.patch_size,
-        batch_size=config.train.batch_size,
         sequence_length_context=config.train.sequence_length_context,
         sequence_length_target=config.train.sequence_length_target,
         sequence_length_prediction=config.train.sequence_length_prediction,
+        patch_size=vit.patch_size,
+        batch_size=config.train.batch_size,
+        num_prediction_targets=config.train.num_prediction_targets,
     )
 
     optimizer = get_optimizer(
@@ -310,6 +311,10 @@ def main(config: DictConfig):
                     config,
                     patch_size=vit.patch_size,
                 )
+
+                gc.collect()
+                torch.cuda.empty_cache()
+
                 wandb.log({"eval": {"accuracy": accuracy}}, step=step)
                 vit.train()
                 predictor.train()
@@ -321,9 +326,6 @@ def main(config: DictConfig):
                 break
 
             step += 1
-
-            gc.collect()
-            torch.cuda.empty_cache()
 
     return -accuracy
 

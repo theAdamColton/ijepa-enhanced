@@ -1,30 +1,62 @@
+import einx
 import safetensors
 import safetensors.torch
 import torch
 import hydra
 import os
 import subprocess
-from torch.nn import functional as F
+
+from ijepa_enhanced.transformer import TransformerBlock
 
 from ..vit import ViT
 from ..predictor import Predictor
 
 
 def copy_in_coerce_(tgt: torch.Tensor, src: torch.Tensor):
-    ndim = src.ndim
-    assert ndim < 3
     assert tgt.ndim == src.ndim
-    shape = tgt.shape
-    to_expand = 2
-    for _ in range(to_expand):
-        src = src.unsqueeze(0)
-    src = F.interpolate(
-        src,
-        shape,
-    )
-    for _ in range(to_expand):
-        src = src.squeeze(0)
+    if tgt.shape != src.shape:
+        new_shape = []
+        for i in range(src.ndim):
+            assert tgt.shape[i] <= src.shape[i]
+
+            new_shape.append(slice(tgt.shape[i]))
+
+        src = src[new_shape]
+
     tgt.copy_(src)
+
+
+def filter_remove_prefix(d, pre):
+    d = {k.removeprefix(pre): v for k, v in d.items() if k.startswith(pre)}
+    return d
+
+
+def copy_in_weight_bias_(tgt, src):
+    copy_in_coerce_(getattr(tgt, "weight"), src["weight"])
+    copy_in_coerce_(getattr(tgt, "bias"), src["bias"])
+    return tgt
+
+
+def copy_in_block_(tgt: TransformerBlock, src):
+    norm1_src = filter_remove_prefix(src, "norm1.")
+    copy_in_weight_bias_(tgt.norm1, norm1_src)
+
+    qkv_src = filter_remove_prefix(src, "attn.qkv.")
+    copy_in_weight_bias_(tgt.attn.qkv, qkv_src)
+
+    attn_proj_src = filter_remove_prefix(src, "attn.proj.")
+    copy_in_weight_bias_(tgt.attn.proj, attn_proj_src)
+
+    norm2_src = filter_remove_prefix(src, "norm2.")
+    copy_in_weight_bias_(tgt.norm2, norm2_src)
+
+    mlp_fc1_src = filter_remove_prefix(src, "mlp.fc1.")
+    copy_in_weight_bias_(tgt.mlp.fc1, mlp_fc1_src)
+
+    mlp_fc2_src = filter_remove_prefix(src, "mlp.fc2.")
+    copy_in_weight_bias_(tgt.mlp.fc2, mlp_fc2_src)
+
+    return tgt
 
 
 def merge_pretrained_ijepa_vit(
@@ -33,6 +65,9 @@ def merge_pretrained_ijepa_vit(
     vit: ViT = None,
     predictor: Predictor = None,
 ):
+    vit.requires_grad_(False)
+    predictor.requires_grad_(False)
+
     model_name = os.path.basename(model_path)
     model_save_path = os.path.join(model_dir, model_name)
 
@@ -44,105 +79,46 @@ def merge_pretrained_ijepa_vit(
     state_dict = torch.load(model_save_path, map_location="cpu")
 
     predictor_src = state_dict["predictor"]
-    predictor_tgt = predictor.state_dict()
-    predictor_tgt_depth = predictor.transformer.depth
 
-    predictor_src = {k.removeprefix("module."): v for k, v in predictor_src.items()}
+    predictor_src = filter_remove_prefix(predictor_src, "module.")
 
-    for k, v in predictor_src.items():
-        if k.startswith("predictor_blocks"):
-            k = k.removeprefix("predictor_blocks.")
-            i = int(k[: k.find(".")])
-
-            if i >= predictor_tgt_depth:
-                continue
-
-            key_layer = f"transformer.layers.{i}."
-
-            if "norm1.weight" in k:
-                copy_in_coerce_(predictor_tgt[key_layer + "norm1.weight"], v)
-
-            elif "norm1.bias" in k:
-                copy_in_coerce_(predictor_tgt[key_layer + "norm1.bias"], v)
-
-            elif "qkv.weight" in k:
-                copy_in_coerce_(predictor_tgt[key_layer + "attn.qkv.weight"], v)
-
-            elif "attn.proj.weight" in k:
-                copy_in_coerce_(predictor_tgt[key_layer + "attn.proj.weight"], v)
-
-            elif "norm2.weight" in k:
-                copy_in_coerce_(predictor_tgt[key_layer + "norm2.weight"], v)
-
-            elif "norm2.bias" in k:
-                copy_in_coerce_(predictor_tgt[key_layer + "norm2.bias"], v)
-
-            elif "mlp.fc1.weight" in k:
-                copy_in_coerce_(predictor_tgt[key_layer + "mlp.layers.0.weight"], v)
-
-            elif "mlp.fc2.weight" in k:
-                copy_in_coerce_(predictor_tgt[key_layer + "mlp.layers.2.weight"], v)
-
-            print("copied pred ", k)
-
-    copy_in_coerce_(
-        predictor_tgt["norm.weight"], predictor_src["predictor_norm.weight"]
-    )
-    copy_in_coerce_(predictor_tgt["norm.bias"], predictor_src["predictor_norm.bias"])
-    copy_in_coerce_(
-        predictor_tgt["pred_head.weight"], predictor_src["predictor_proj.weight"]
+    copy_in_coerce_(predictor.is_prediction_token, predictor_src["mask_token"][0, 0])
+    copy_in_weight_bias_(
+        predictor.proj_in, filter_remove_prefix(predictor_src, "predictor_embed.")
     )
 
-    predictor.load_state_dict(predictor_tgt)
+    for i, block_tgt in enumerate(predictor.transformer.layers):
+        block_src = filter_remove_prefix(predictor_src, f"predictor_blocks.{i}.")
+        copy_in_block_(block_tgt, block_src)
+
+    copy_in_weight_bias_(
+        predictor.norm, filter_remove_prefix(predictor_src, "predictor_norm.")
+    )
+    copy_in_weight_bias_(
+        predictor.pred_head, filter_remove_prefix(predictor_src, "predictor_proj.")
+    )
 
     # vit encoder
 
     encoder_src = state_dict["encoder"]
-    encoder_tgt = vit.state_dict()
-    encoder_tgt_depth = vit.model.depth
 
-    encoder_src = {k.removeprefix("module."): v for k, v in encoder_src.items()}
+    encoder_src = filter_remove_prefix(encoder_src, "module.")
 
-    for k, v in encoder_src.items():
-        if k.startswith("blocks."):
-            k = k.removeprefix("blocks.")
-            i = int(k[: k.find(".")])
-
-            if i >= encoder_tgt_depth:
-                continue
-
-            key_layer = f"model.layers.{i}."
-
-            if "norm1.weight" in k:
-                copy_in_coerce_(encoder_tgt[key_layer + "norm1.weight"], v)
-
-            elif "norm1.bias" in k:
-                copy_in_coerce_(encoder_tgt[key_layer + "norm1.bias"], v)
-
-            elif "qkv.weight" in k:
-                copy_in_coerce_(encoder_tgt[key_layer + "attn.qkv.weight"], v)
-
-            elif "attn.proj.weight" in k:
-                copy_in_coerce_(encoder_tgt[key_layer + "attn.proj.weight"], v)
-
-            elif "norm2.weight" in k:
-                copy_in_coerce_(encoder_tgt[key_layer + "norm2.weight"], v)
-
-            elif "norm2.bias" in k:
-                copy_in_coerce_(encoder_tgt[key_layer + "norm2.bias"], v)
-
-            elif "mlp.fc1.weight" in k:
-                copy_in_coerce_(encoder_tgt[key_layer + "mlp.layers.0.weight"], v)
-
-            elif "mlp.fc2.weight" in k:
-                copy_in_coerce_(encoder_tgt[key_layer + "mlp.layers.2.weight"], v)
-
-            else:
-                continue
-
-            print("copied encoder", k)
-
-    vit.load_state_dict(encoder_tgt)
+    patch_emb_src = filter_remove_prefix(encoder_src, "patch_embed.proj.")
+    patch_emb_src["weight"] = einx.rearrange(
+        "z c h w -> z (c h w)", patch_emb_src["weight"]
+    )
+    copy_in_weight_bias_(
+        vit.to_patch_embedding[1],
+        patch_emb_src,
+    )
+    for i, block_tgt in enumerate(vit.transformer.layers):
+        block_src = filter_remove_prefix(encoder_src, f"blocks.{i}.")
+        copy_in_block_(block_tgt, block_src)
+    copy_in_weight_bias_(
+        vit.norm,
+        filter_remove_prefix(encoder_src, "norm."),
+    )
 
     return vit, predictor
 

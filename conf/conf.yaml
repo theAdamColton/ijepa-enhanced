@@ -7,11 +7,14 @@ defaults:
 
 seed: 42
 wandb_mode: online
-num_workers: 2
+num_workers: 4
 
 train:
   dataset:
     crop_to_resolution_multiple_of: ${model.vit.patch_size}
+  patchnpack_args:
+    patch_size: ${model.vit.patch_size}
+    batch_size: ${train.batch_size}
 
 
 eval:

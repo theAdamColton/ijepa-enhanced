@@ -242,6 +242,7 @@ class MakeIterableMixin:
 
         returns a generator that yields batches
         """
+        data_iter = iter(data_iter)
         while True:
             if not self.can_pop_batch():
                 try:

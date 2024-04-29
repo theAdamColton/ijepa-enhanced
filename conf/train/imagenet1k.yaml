@@ -15,9 +15,12 @@ accelerator_project_configuration:
 gradient_checkpoint: True
 ema:
   beta: 0.99
+
 sequence_length_context: 256
 sequence_length_target: 768
 sequence_length_prediction: 768
+num_prediction_targets: 4
+
 commit_loss_weight: 2e-5
 entropy_loss_weight: 1e0
 entropy_sample_minimization_weight: 1e-7
