@@ -33,12 +33,10 @@ def make_pred(ctx, teacher, predictor, predictor_head, accelerator):
         if id == MASK_IMAGE_ID:
             continue
         mask = ctx_image_ids == id
-        hidden_states = hidden_states[mask].mean(0)
-
+        image_hidden_states = hidden_states[mask].mean(0)
         label = ctx_labels[mask][0]
         all_labels.append(label)
-
-        all_hidden_states.append(hidden_states)
+        all_hidden_states.append(image_hidden_states)
 
     all_hidden_states = torch.stack(all_hidden_states)
 

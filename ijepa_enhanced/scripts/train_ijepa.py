@@ -312,9 +312,11 @@ def main(config: DictConfig):
 
             teacher.update()
 
+            loss_dict["loss"] = loss
+
             loss_stmt = " ".join([f"{k}:{v.item():.5f}" for k, v in loss_dict.items()])
 
-            accelerator.print(f"train loss: {loss.item():.5f} {loss_stmt} step {step}")
+            accelerator.print(f"train {loss_stmt} step {step}")
             accelerator.log({"train": loss_dict}, step=step)
 
             del loss_dict, loss

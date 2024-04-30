@@ -1,6 +1,6 @@
 name: lfq-huge
 codebook_size: 2048
 num_codebooks: 8
-temperature: 0.1
+temperature: 0.01
 eps: 1e-9
 

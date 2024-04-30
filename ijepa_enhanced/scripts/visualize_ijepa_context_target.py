@@ -5,8 +5,6 @@ import hydra
 from omegaconf import DictConfig
 from ..patchnpack import MASK_IMAGE_ID, ContextTargetPatchNPacker, unpack
 from ..dataset import get_dataset
-from tensorsequence import TensorSequence
-from ..utils import imshow, imsave
 
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="conf")
