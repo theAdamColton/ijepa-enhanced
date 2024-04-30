@@ -5,6 +5,7 @@ import hydra
 from omegaconf import DictConfig
 from ..patchnpack import MASK_IMAGE_ID, ContextTargetPatchNPacker, unpack
 from ..dataset import get_dataset
+from ..utils import imsave
 
 
 @hydra.main(version_base=None, config_path="../../conf", config_name="conf")
@@ -29,7 +30,7 @@ def main(config: DictConfig):
     )
     dataloader = iter(dataloader)
 
-    for context, target in patchnpacker.make_iter(dataloader):
+    for batch_idx, (context, target) in enumerate(patchnpacker.make_iter(dataloader)):
         batch_size = context.leading_shape[0]
         device = context.all_columns[0].device
 
@@ -49,14 +50,32 @@ def main(config: DictConfig):
             context.leading_shape, device=device, dtype=torch.bool
         )
 
+        for seq_i in range(target.leading_shape[0]):
+            target_seq = target.iloc[seq_i]
+            target_images = unpack(
+                target_seq["patches"],
+                target_seq["positions"],
+                target_seq["image_ids"],
+                patchnpacker.patch_size,
+                3,
+            )
+            target_ids = target_seq["image_ids"]
+            target_ids = target_ids[target_ids != MASK_IMAGE_ID].unique()
+            for id, image in zip(target_ids, target_images):
+                imsave(
+                    image,
+                    f"viz-output/batch-{batch_idx:04}-seq{seq_i:04}-image-{id.item():04}-target.jpg",
+                    norm=True,
+                )
+
         for mask_i, prediction_block_mask in enumerate(prediction_block_masks):
             pred = patchnpacker.pack_prediction_target_sequence(
                 target, context, prediction_block_mask
             )
 
             # visualizes target patches
-            for batch_index in range(pred.leading_shape[0]):
-                pred_seq = pred.iloc[batch_index]
+            for seq_i in range(pred.leading_shape[0]):
+                pred_seq = pred.iloc[seq_i]
 
                 patches = pred_seq["patches"]
                 positions = pred_seq["positions"]
@@ -101,7 +120,7 @@ def main(config: DictConfig):
                 for id, image in zip(ids, images):
                     imsave(
                         image,
-                        f"viz-output/image-{id.item():04}-mask{mask_i:04}.jpg",
+                        f"viz-output/batch-{batch_idx:04}-seq{seq_i:04}-image-{id.item():04}-mask{mask_i:04}.jpg",
                         norm=True,
                     )
 
