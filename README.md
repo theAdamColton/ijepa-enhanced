@@ -6,6 +6,8 @@ The main features are:
 * variable resolution (NaViT, Pack n patch)
 * token merging (TOME)
 
+See a full writeup [here](https://theadamcolton.github.io/image-ssl-on-a-shoestring). I trained a ViT S for 6 hours on a RTX 3090 using the default config, it gets 27% validation accuracy on imagenet1k.
+
 
 ### Variable Resolutions
 
