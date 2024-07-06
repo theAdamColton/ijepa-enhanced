@@ -1,0 +1,101 @@
+max_abs_res: 448
+patch_size: 14
+num_workers: 4
+torch_compile: true
+
+train:
+  merge_pretrained_vit: false
+  batch_size: 192
+  run_eval_every_num_steps: 50000
+  save_every_num_steps: 1000
+  num_steps: 200000
+  warmup_steps: 5000
+  log_every_num_steps: 20
+  scheduler_scale: 1.25
+  start_beta: 0.996
+  lr: 1e-3
+
+  mask_args:
+    num_prediction_targets: 3
+
+  should_unmerge: true
+  teacher_r: 16
+  student_r: 8
+  merge_mode: drop
+
+dataset_train:
+  sequence_length_context: 192
+  sequence_length_prediction: 128
+  max_abs_res: ${max_abs_res}
+  patch_size: ${patch_size}
+  num_workers: ${num_workers}
+
+  min_side_res: 70
+  max_side_res: 224
+  resize_mode: random_resized_crop
+  drop_chance: 0.0
+
+  path: /nvme/imagenet1k-256/imagenet1k-train-{0000..1023}.tar
+  label_column_name: cls
+
+
+probe_eval:
+  batch_size_encoder: 1024
+  batch_size_probe: 512
+  num_epochs: 50
+  val_split: 0.01
+  scheduler_scale: 1.25
+
+  r: 8
+  merge_mode: drop
+  should_unmerge: true
+
+dataset_train_probe:
+  sequence_length_context: 384
+  max_abs_res: ${max_abs_res}
+  patch_size: ${patch_size}
+  num_workers: ${num_workers}
+
+  min_side_res: 252
+  max_side_res: 252
+  resize_mode: crop
+  drop_chance: 0.0
+
+  path: /nvme/imagenet1k-256/imagenet1k-train-{0000..1023}.tar
+  label_column_name: cls
+  num_samples: 1281167
+
+dataset_val:
+  sequence_length_context: 384
+  max_abs_res: ${max_abs_res}
+  patch_size: ${patch_size}
+  num_workers: ${num_workers}
+
+  min_side_res: 252
+  max_side_res: 252
+  resize_mode: resize
+  drop_chance: 0.0
+
+  path: /nvme/imagenet1k-256/imagenet1k-validation-{00..63}.tar
+  label_column_name: cls
+  num_samples: 50000
+
+vit:
+  patch_size: ${patch_size}
+  hidden_size: 384
+  depth: 12
+  num_attention_heads: 6
+  max_height: 32
+  max_width: 32
+  use_layerscale: false
+  use_joint_position_embed: false
+
+predictor:
+  input_size: 384
+  hidden_size: 256
+  depth: 4
+  num_attention_heads: 4
+  use_layerscale: false
+  max_height: 32
+  max_width: 32
+  use_joint_position_embed: false
