@@ -7,7 +7,7 @@ train:
   merge_pretrained_vit: false
   batch_size: 192
   run_eval_every_num_steps: 50000
-  save_every_num_steps: 1000
+  save_every_num_steps: 10000
   num_steps: 200000
   warmup_steps: 5000
   log_every_num_steps: 20
@@ -35,7 +35,7 @@ dataset_train:
   resize_mode: random_resized_crop
   drop_chance: 0.0
 
-  path: /nvme/imagenet1k-256/imagenet1k-train-{0000..1023}.tar
+  path: /nvme/imagenet1k/imagenet1k-train-{0000..1023}.tar
   label_column_name: cls
 
 
@@ -61,7 +61,7 @@ dataset_train_probe:
   resize_mode: crop
   drop_chance: 0.0
 
-  path: /nvme/imagenet1k-256/imagenet1k-train-{0000..1023}.tar
+  path: /nvme/imagenet1k/imagenet1k-train-{0000..1023}.tar
   label_column_name: cls
   num_samples: 1281167
 
@@ -76,7 +76,7 @@ dataset_val:
   resize_mode: resize
   drop_chance: 0.0
 
-  path: /nvme/imagenet1k-256/imagenet1k-validation-{00..63}.tar
+  path: /nvme/imagenet1k/imagenet1k-validation-{00..63}.tar
   label_column_name: cls
   num_samples: 50000
 
