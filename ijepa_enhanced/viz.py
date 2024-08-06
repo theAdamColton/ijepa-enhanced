@@ -79,11 +79,12 @@ def make_viz(context, preds, patch_size=14):
 def viz(conf):
     torch.manual_seed(42)
     sequence_length_context = conf.dataset_train.sequence_length_context
-    dataloader = get_dataloader(
-        batch_size=16, packer_batch_size=8, **conf.dataset_train
-    )
+    dataset_train_args = conf.dataset_train
+    dataset_train_args["packer_batch_size"] = 8
+    dataset_train_args["batch_size"] = 16
+    dataloader = get_dataloader(**conf.dataset_train)
 
-    num_batches = 8
+    num_batches = 16
 
     for i, batch in enumerate(dataloader):
         patches, metadata_batch = batch

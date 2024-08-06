@@ -1,4 +1,3 @@
-from schedulefree import AdamWScheduleFree
 from torch import distributed as dist
 import multiprocessing as mp
 import torch

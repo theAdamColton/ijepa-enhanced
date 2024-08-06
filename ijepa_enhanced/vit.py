@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.nn.init import trunc_normal_
 
 from ijepa_enhanced.data import MASK_ID
@@ -23,11 +23,12 @@ class MLP(nn.Module):
     def __init__(
         self,
         num_features,
+        use_bias=True,
     ):
         super().__init__()
-        self.fc1 = nn.Linear(num_features, num_features * 4)
+        self.fc1 = nn.Linear(num_features, num_features * 4, bias=use_bias)
         self.act = nn.GELU()
-        self.fc2 = nn.Linear(num_features * 4, num_features)
+        self.fc2 = nn.Linear(num_features * 4, num_features, bias=use_bias)
 
     def forward(self, x):
         x = self.fc1(x)
@@ -50,17 +51,12 @@ def make_attn_mask(sequence_ids, sequence_mask, num_attention_heads):
 
 
 class Attention(nn.Module):
-    def __init__(
-        self,
-        dim,
-        num_attention_heads=8,
-        qkv_bias=True,
-    ):
+    def __init__(self, dim, num_attention_heads=8, use_bias=True):
         super().__init__()
         self.num_attention_heads = num_attention_heads
         self.head_dim = dim // num_attention_heads
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.proj = nn.Linear(dim, dim)
+        self.qkv = nn.Linear(dim, dim * 3, bias=use_bias)
+        self.proj = nn.Linear(dim, dim, bias=use_bias)
 
     def forward(self, x, attn_mask=None, return_keys=False):
         """
@@ -107,7 +103,7 @@ class Block(nn.Module):
         self,
         dim,
         num_attention_heads,
-        qkv_bias=True,
+        use_bias=True,
         use_layerscale=True,
     ):
         super().__init__()
@@ -116,10 +112,10 @@ class Block(nn.Module):
         self.attn = Attention(
             dim,
             num_attention_heads=num_attention_heads,
-            qkv_bias=qkv_bias,
+            use_bias=use_bias,
         )
         self.norm2 = nn.LayerNorm(dim)
-        self.mlp = MLP(dim)
+        self.mlp = MLP(dim, use_bias=use_bias)
         self.ls2 = LayerScale(dim) if use_layerscale else nn.Identity()
 
     def forward(self, x, attn_mask=None):
@@ -165,13 +161,13 @@ class TomeBlocks(nn.Module):
         depth=12,
         dim=512,
         num_attention_heads=8,
-        qkv_bias=True,
+        use_bias=True,
         use_layerscale=True,
     ):
         super().__init__()
         self.blocks = nn.ModuleList(
             [
-                Block(dim, num_attention_heads, qkv_bias, use_layerscale)
+                Block(dim, num_attention_heads, use_bias, use_layerscale)
                 for _ in range(depth)
             ]
         )
@@ -252,10 +248,11 @@ class Predictor(nn.Module):
         max_width=48,
         use_layerscale=True,
         use_joint_position_embed=False,
+        use_bias=True,
     ):
         super().__init__()
         self.num_attention_heads = num_attention_heads
-        self.predictor_embed = nn.Linear(input_size, hidden_size, bias=True)
+        self.predictor_embed = nn.Linear(input_size, hidden_size, bias=use_bias)
         if use_joint_position_embed:
             self.position_embed = JointPositionEmbedding(
                 hidden_size, max_height, max_width
@@ -273,7 +270,7 @@ class Predictor(nn.Module):
             use_layerscale=use_layerscale,
         )
         self.predictor_norm = nn.LayerNorm(hidden_size)
-        self.predictor_proj = nn.Linear(hidden_size, input_size, bias=True)
+        self.predictor_proj = nn.Linear(hidden_size, input_size, bias=use_bias)
 
         self.apply(_init_weights)
         trunc_normal_(self.mask_token, std=0.02)
@@ -335,10 +332,11 @@ class PredictorPositionless(nn.Module):
         max_width=48,
         use_layerscale=True,
         use_joint_position_embed=False,
+        use_bias=True,
     ):
         super().__init__()
         self.num_attention_heads = num_attention_heads
-        self.predictor_embed = nn.Linear(input_size, hidden_size, bias=True)
+        self.predictor_embed = nn.Linear(input_size, hidden_size, bias=use_bias)
         self.mask_token = nn.Parameter(torch.zeros(hidden_size))
 
         self.blocks = TomeBlocks(
@@ -348,7 +346,7 @@ class PredictorPositionless(nn.Module):
             use_layerscale=use_layerscale,
         )
         self.predictor_norm = nn.LayerNorm(hidden_size)
-        self.predictor_proj = nn.Linear(hidden_size, input_size, bias=True)
+        self.predictor_proj = nn.Linear(hidden_size, input_size, bias=use_bias)
 
         self.apply(_init_weights)
         trunc_normal_(self.mask_token, std=0.02)
@@ -412,11 +410,14 @@ class ViT(nn.Module):
         max_width=48,
         use_layerscale=True,
         use_joint_position_embed=False,
+        use_bias=True,
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_attention_heads = num_attention_heads
-        self.patch_embed = nn.Linear(patch_size**2 * image_channels, hidden_size)
+        self.patch_embed = nn.Linear(
+            patch_size**2 * image_channels, hidden_size, bias=use_bias
+        )
         self.max_height = max_height
         self.max_width = max_width
         self.use_layerscale = use_layerscale
@@ -434,6 +435,7 @@ class ViT(nn.Module):
             depth=depth,
             dim=hidden_size,
             num_attention_heads=num_attention_heads,
+            use_bias=use_bias,
             use_layerscale=use_layerscale,
         )
         self.norm = nn.LayerNorm(hidden_size)

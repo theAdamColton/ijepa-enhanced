@@ -79,8 +79,11 @@ def smooth_rank(x, eps=1e-7):
     s_norm = s.norm(1)
     p = s / s_norm
     log_p = torch.log(p + eps)
-    entropy = torch.exp(-(p * log_p).sum()).item()
+    entropy = torch.exp(-(p * log_p).sum())
     return entropy
+
+
+# def repeat_batch(x, count):
 
 
 def compute_loss(
@@ -104,19 +107,17 @@ def compute_loss(
         )
 
         log_dict["percent_padding_all"] = (
-            (patches["sequence_ids"] == MASK_ID).float().mean().item()
+            (patches["sequence_ids"] == MASK_ID).float().mean()
         )
         log_dict["percent_padding_pred"] = (
             (patches["sequence_ids"][:, sequence_length_context:] == MASK_ID)
             .float()
             .mean()
-            .item()
         )
         log_dict["percent_padding_context"] = (
             (patches["sequence_ids"][:, :sequence_length_context] == MASK_ID)
             .float()
             .mean()
-            .item()
         )
 
     prediction_block_masks = patches.named_columns.pop("prediction_block_masks")
@@ -278,7 +279,7 @@ def compute_loss(
 
     loss = F.smooth_l1_loss(predictor_hidden_states, teacher_hidden_states)
 
-    log_dict["loss"] = loss.item()
+    log_dict["loss"] = loss
     return loss, log_dict
 
 
@@ -305,6 +306,17 @@ def get_is_main_proc():
     return True
 
 
+def dict_to_cpu(d):
+    for k in d.keys():
+        v = d[k]
+        if isinstance(v, torch.Tensor):
+            if v.nelement() == 1:
+                d[k] = v.item()
+            else:
+                d[k] = v.cpu()
+    return d
+
+
 def train(conf, optimizer, scaler, teacher, student, predictor, global_step, epoch):
     device = "cuda"
 
@@ -329,9 +341,10 @@ def train(conf, optimizer, scaler, teacher, student, predictor, global_step, epo
     save_every_num_steps = conf.train.save_every_num_steps
     lr = conf.train.lr
 
+    num_scheduler_steps = num_train_steps * scheduler_scale
     scheduler = CosineAnnealingWarmup(
         optim=optimizer,
-        max_steps=num_train_steps * scheduler_scale,
+        max_steps=num_scheduler_steps,
         start_lr=2e-4,
         lr=lr,
         warmup_steps=num_warmup_steps,
@@ -340,7 +353,7 @@ def train(conf, optimizer, scaler, teacher, student, predictor, global_step, epo
 
     beta_scheduler = BetaScheduler(
         conf.train.start_beta,
-        steps=num_train_steps * scheduler_scale,
+        steps=num_scheduler_steps,
         start_step=global_step,
     )
 
@@ -359,15 +372,29 @@ def train(conf, optimizer, scaler, teacher, student, predictor, global_step, epo
     teacher_r = conf.train.teacher_r
     merge_mode = conf.train.merge_mode
     should_unmerge = conf.train.should_unmerge
+    gradient_accumulation_steps = max(conf.train.gradient_accumulation_steps, 1)
+
+    total_mini_steps = num_train_steps * gradient_accumulation_steps
 
     prog_bar = tqdm(
-        total=conf.train.num_steps, initial=global_step, disable=not is_main_proc
+        total=total_mini_steps, initial=global_step, disable=not is_main_proc
     )
     prev_time = time.time()
+    mini_step = 0
     while True:
         for batch in dataloader:
-            run_eval = (global_step + 1) % run_eval_every_num_steps == 0
-            should_log = (global_step % conf.train.log_every_num_steps == 0) or run_eval
+            should_model_update = mini_step == gradient_accumulation_steps - 1
+            run_eval = (
+                global_step + 1
+            ) % run_eval_every_num_steps == 0 and should_model_update
+            should_log = (
+                (global_step % conf.train.log_every_num_steps == 0) or run_eval
+            ) and should_model_update
+            should_save = (
+                (global_step + 1) % save_every_num_steps == 0
+                and is_main_proc
+                and should_model_update
+            )
 
             log_dict = {}
 
@@ -375,7 +402,7 @@ def train(conf, optimizer, scaler, teacher, student, predictor, global_step, epo
             patches = patches.to_device("cuda")
 
             with torch.autocast(device, torch.bfloat16):
-                loss, train_log_dict = compute_loss(
+                loss, train_log_dict = compute_loss_fn(
                     patches=patches,
                     student=student,
                     student_r=student_r,
@@ -388,18 +415,21 @@ def train(conf, optimizer, scaler, teacher, student, predictor, global_step, epo
                     merge_mode=merge_mode,
                 )
 
+            train_log_dict = dict_to_cpu(train_log_dict)
+
             log_dict["train"] = train_log_dict
 
-            scaler.scale(loss).backward()
+            scaler.scale(loss / gradient_accumulation_steps).backward()
 
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
-            beta_scheduler.step()
-            scheduler.step()
+            if should_model_update:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+                beta_scheduler.step()
+                scheduler.step()
 
-            with torch.no_grad():
-                ema_update(teacher, student, beta=beta_scheduler.beta)
+                with torch.no_grad():
+                    ema_update(teacher, student, beta=beta_scheduler.beta)
 
             step_duration = time.time() - prev_time
 
@@ -427,10 +457,10 @@ def train(conf, optimizer, scaler, teacher, student, predictor, global_step, epo
                 if is_dist_training:
                     dist.barrier()
 
-            if (global_step + 1) % save_every_num_steps == 0 and is_main_proc:
+            if should_save:
                 save(
                     run_name,
-                    global_step,
+                    global_step + 1,
                     epoch,
                     should_torch_compile,
                     teacher,
@@ -444,7 +474,14 @@ def train(conf, optimizer, scaler, teacher, student, predictor, global_step, epo
                 wandb.log(log_dict, step=global_step)
 
             prev_time = time.time()
-            global_step += 1
+
+            if should_model_update:
+                global_step += 1
+            mini_step = (mini_step + 1) % gradient_accumulation_steps
+
+            if global_step >= num_train_steps:
+                break
+
         epoch += 1
 
         if global_step >= num_train_steps:
@@ -455,7 +492,7 @@ def train(conf, optimizer, scaler, teacher, student, predictor, global_step, epo
     if is_main_proc:
         save(
             run_name,
-            global_step,
+            global_step + 1,
             epoch,
             should_torch_compile,
             teacher,

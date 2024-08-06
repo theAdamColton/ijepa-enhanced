@@ -36,7 +36,14 @@ class FilterMinRes(nn.Module):
 
 
 def get_resized_h_w(
-    h, w, min_side_res: int, max_side_res: int, patch_size: int, max_abs_res: int
+    h,
+    w,
+    min_side_res: int = 64,
+    max_side_res: int = 512,
+    patch_size: int = 14,
+    max_abs_res: int = 1024,
+    max_h=None,
+    max_w=None,
 ):
     side_res = int(rand_a_b(min_side_res, max_side_res))
     ar = h / w
@@ -44,8 +51,10 @@ def get_resized_h_w(
     nw = ((side_res**2) / ar) ** 0.5
     nh = ar * nw
 
-    nw = min(nw, w)
-    nh = min(nh, h)
+    if max_w:
+        nw = min(nw, max_w)
+    if max_h:
+        nh = min(nh, max_h)
 
     nph = int(max(nh // patch_size, 1))
     npw = int(max(nw // patch_size, 1))
@@ -77,6 +86,8 @@ class RandomCrop(nn.Module):
             self.max_side_res,
             self.patch_size,
             self.max_abs_res,
+            max_h=h,
+            max_w=w,
         )
         crop_fn = torchvision.transforms.RandomCrop((nh, nw))
         return crop_fn(pixel_values)
@@ -170,7 +181,13 @@ def has_context_patches(row):
 
 
 def has_prediction_patches(row):
-    return row["prediction_patches"].size(0) > 0
+    prediction_patches = row["prediction_patches"]
+    if prediction_patches.size(0) <= 0:
+        return False
+    prediction_block_masks = prediction_patches["prediction_block_masks"]
+    if not prediction_block_masks.sum(0).all():
+        return False
+    return True
 
 
 def combine_context_targets(row):
