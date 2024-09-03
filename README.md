@@ -9,6 +9,9 @@ The main features are:
 See a full writeup [here](https://theadamcolton.github.io/image-ssl-on-a-shoestring). I trained a ViT S for 6 hours on a RTX 3090 using the default config, it gets 27% validation accuracy on imagenet1k.
 
 
+I trained a larger ViT-L for 160 hours on the same RTX 3090. It obtained 56% validation accuracy on imagenet1k.
+
+
 ### Variable Resolutions
 
 Training batches are composed of images of different resolutions and aspect ratios. Image patches are packed together, and padded to form a batch of constant sequence length. 
