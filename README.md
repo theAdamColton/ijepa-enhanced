@@ -1,10 +1,16 @@
-# IJEPA-Enhanced
+# IJEPA-Enhanced - Native resolution IJEPA
+
+
+![batch000-seq008-id37-Chihuahua](https://github.com/user-attachments/assets/bb168871-2884-4c1a-9668-18db3ddadf81)
+![batch000-seq015-id47-Groenendael](https://github.com/user-attachments/assets/7bea67d2-395f-4da5-8185-f226831c143c)
+![batch000-seq006-id89-greenhouse](https://github.com/user-attachments/assets/62f7433f-8e46-4adf-b19a-7abf90ae73d2)
+![batch000-seq004-id86-chain mail](https://github.com/user-attachments/assets/5b76fba2-bb31-45fe-ac61-74b754f7e29a)
 
 IJEPA-Enhanced aims to expand the usability of image JEPA models for real world usage. IJEPA-Enhanced employs a variety of techniques to improve the efficiency of the model for inference and training.
 
 The main features are:
-* variable resolution (NaViT, Pack n patch)
-* token merging (TOME)
+* variable resolution allowing training on native resolution (NaViT, Pack n patch)
+* token merging for ViT acceleration (TOME)
 
 See a full writeup [here](https://theadamcolton.github.io/image-ssl-on-a-shoestring). I trained a ViT S for 6 hours on a RTX 3090 using the default config, it gets 27% validation accuracy on imagenet1k.
 
